@@ -1,6 +1,6 @@
 # secure-oc
 
-A PowerShell wrapper that securely stores and injects API keys into [opencode](https://opencode.ai), the AI coding assistant.
+A PowerShell wrapper that securely stores and injects API keys into [OpenCode](https://opencode.ai), the AI coding assistant.
 
 Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) using **PBKDF2** (600,000 iterations, SHA-256) with a random salt and nonce, protected by a master password. The encrypted keys live in a single `api-keys.dat` file.
 
@@ -8,7 +8,7 @@ Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) usin
 
 | Command | Description |
 |---------|-------------|
-| `oc` | Start or attach to opencode (starts background server if needed) |
+| `oc` | Start or attach to OpenCode (starts background server if needed) |
 | `oc serve` | Start a persistent server in the **foreground** |
 | `oc serve -Background` | Start a persistent server as a **background daemon** |
 | `oc serve -Status` | Show server status (mode, password hint) |
@@ -16,8 +16,6 @@ Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) usin
 | `oc encrypt` | Encrypt and store API keys |
 | `oc decrypt` | List stored API key names |
 | `oc decrypt -ShowValues` | Show key values (use with care!) |
-| `oc session [args..]` | Manage opencode sessions |
-| `oc model [provider]` | List AI models |
 | `oc stop` | Stop the running server |
 | `oc -Dir <path>` | Attach with a specific working directory |
 | `oc -Help` | Show help |
@@ -65,7 +63,7 @@ Shows the names of all keys stored in the file. To also reveal the values (use w
 .\oc.ps1 decrypt -ShowValues
 ```
 
-### 3. Launch opencode
+### 3. Launch OpenCode
 
 ```powershell
 .\oc.ps1
@@ -81,7 +79,7 @@ Shows the names of all keys stored in the file. To also reveal the values (use w
 .\oc.ps1 serve
 ```
 
-Runs the server in the current terminal, showing opencode's logs. Close the terminal or press Ctrl+C to stop. Other terminals can still attach.
+Runs the server in the current terminal, showing OpenCode's logs. Close the terminal or press Ctrl+C to stop. Other terminals can still attach.
 
 ### 5. Background persistent server (daemon)
 
@@ -114,7 +112,7 @@ Runs the server in the background, surviving terminal closure. Stop it manually:
 
 ## Security
 
-The opencode server is protected by an **auto-generated random password** created each time the server starts:
+The OpenCode server is protected by an **auto-generated random password** created each time the server starts:
 
 - Password is generated from a cryptographically random GUID
 - Set via `OPENCODE_SERVER_PASSWORD` environment variable in the server process only (never in the parent session)
@@ -138,4 +136,4 @@ All runtime state lives in `%USERPROFILE%\.oc\`:
 ## Requirements
 
 - PowerShell 5+ (`pwsh` recommended)
-- [opencode](https://opencode.ai) installed and available in `PATH`
+- [OpenCode](https://opencode.ai) installed and available in `PATH`
