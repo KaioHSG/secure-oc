@@ -531,10 +531,9 @@ function Stop-AndCleanup {
 # ============================================================
 
 function Show-Help {
+    Write-Host "`noc - Secure opencode wrapper`n" -ForegroundColor Cyan
+    Write-Host "Usage:" -ForegroundColor Yellow
     Write-Host @"
-oc - Secure opencode wrapper
-
-Usage:
   oc                          Start opencode (start server if needed, attach)
   oc serve                    Start a persistent server (foreground, shows logs)
   oc serve -Background        Start a persistent server in background (daemon)
@@ -545,28 +544,31 @@ Usage:
   oc decrypt -ShowValues      Show key values (use with care!)
   oc stop                     Stop the running server
   oc -Dir <path>              Attach with a specific working directory
-  oc -Help                    Show this help
-
-Workflow:
+  oc -Help                    Show this help`n
+"@
+    Write-Host "Workflow:" -ForegroundColor Yellow
+    Write-Host @"
   1st run: oc            -> prompts for master password, starts password-protected server, attaches
   2nd run: oc            -> attaches directly (no master password), server stays alive
   oc serve               -> foreground persistent; Ctrl+C to stop
   oc serve -Background   -> background daemon; auto-stops after 15 min idle; use oc stop to shut down
   oc serve -Status       -> show current mode
-  oc serve -Restart      -> kill and restart with new password
-
-Security:
+  oc serve -Restart      -> kill and restart with new password`n
+"@
+    Write-Host "Security:" -ForegroundColor Yellow
+    Write-Host @"
   Server protected with auto-generated password stored in %USERPROFILE%\.oc\server-state.json
   Password stays the same when switching modes. Changes only on restart or fresh start.
-  Background servers stop automatically after 15 minutes without an active session.
-
-Flags:
+  Background servers stop automatically after 15 minutes without an active session.`n
+"@
+    Write-Host "Flags:" -ForegroundColor Yellow
+    Write-Host @"
   -Dir <path>      Working directory for attach
   -Background      Run server in background (for oc serve)
   -Status          Show server status (for oc serve)
   -Restart         Restart server (for oc serve)
   -ShowValues      Show secret values (use with decrypt)
-  -Help            Show this help
+  -Help            Show this help`n
 "@
 }
 
