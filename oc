@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec pwsh "$(dirname "$0")/oc.ps1" "$@"
