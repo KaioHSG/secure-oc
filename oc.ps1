@@ -276,6 +276,22 @@ function Remove-ServerState {
     if (Test-Path $statePath) { Remove-Item $statePath -Force }
 }
 
+function Sync-ServerPidFromPort {
+    $realPid = $script:serverPid
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $serverPort -State Listen -ErrorAction Stop | Select-Object -First 1
+        if ($conn -and $conn.OwningProcess) { $realPid = $conn.OwningProcess }
+    } catch {}
+
+    if ($realPid -and $realPid -ne $script:serverPid) {
+        $script:serverPid = $realPid
+        $state = Get-ServerState
+        if ($state) {
+            Set-ServerState -Mode $state.mode -Password $state.password -ServerPid $realPid
+        }
+    }
+}
+
 # ============================================================
 # server process management
 # ============================================================
@@ -316,19 +332,19 @@ function Wait-ServerReady {
 }
 
 function Start-ServerProcess {
-    # Spawns 'opencode serve' detached from this session (daemon-style).
-    # API keys and the password are injected only via process environment.
     param($KeysObj, $Password)
     Ensure-Dir $stateDir -Protect $true
 
+    $oc = Get-OpencodePath
+
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName          = "opencode"
+    $psi.FileName          = $oc
     $psi.Arguments         = "serve --port $serverPort"
     $psi.UseShellExecute   = $false
     $psi.CreateNoWindow    = $true
     $psi.RedirectStandardOutput  = $false
     $psi.RedirectStandardError   = $false
-    $psi.WorkingDirectory  = $PSScriptRoot
+    $psi.WorkingDirectory  = $HOME
 
     foreach ($prop in $KeysObj.psobject.properties) {
         $psi.EnvironmentVariables[$prop.Name] = $prop.Value
@@ -344,14 +360,16 @@ function Start-ForegroundProcess {
     param($KeysObj, $Password)
     Ensure-Dir $stateDir -Protect $true
 
+    $oc = Get-OpencodePath
+
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName          = "opencode"
+    $psi.FileName          = $oc
     $psi.Arguments         = "serve --port $serverPort"
     $psi.UseShellExecute   = $false
     $psi.CreateNoWindow    = $false
     $psi.RedirectStandardOutput  = $false
     $psi.RedirectStandardError   = $false
-    $psi.WorkingDirectory  = $PSScriptRoot
+    $psi.WorkingDirectory  = $HOME
 
     foreach ($prop in $KeysObj.psobject.properties) {
         $psi.EnvironmentVariables[$prop.Name] = $prop.Value
@@ -361,6 +379,10 @@ function Start-ForegroundProcess {
     $process = [System.Diagnostics.Process]::Start($psi)
     $myPid = $process.Id
     $script:serverPid = $myPid
+    Start-Sleep -Milliseconds 500
+    Sync-ServerPidFromPort
+    $myPid = $script:serverPid
+
     Set-ServerState -Mode "foreground" -Password $Password -ServerPid $myPid
     $process.WaitForExit()
 
@@ -490,6 +512,16 @@ function Assert-Opencode {
     return $false
 }
 
+function Get-OpencodePath {
+    $path = (Get-Command opencode -ErrorAction Stop).Source
+    # .ps1 can't be launched by CreateProcess; npm ships .cmd alongside it
+    if ([IO.Path]::GetExtension($path) -eq '.ps1') {
+        $cmd = [IO.Path]::ChangeExtension($path, '.cmd')
+        if (Test-Path $cmd) { return $cmd }
+    }
+    return $path
+}
+
 function Assert-KeysFile {
     if (Test-Path $dataPath) { return $true }
     Write-Host "No api-keys.dat found. Run '" -NoNewline -ForegroundColor Yellow
@@ -531,8 +563,9 @@ function Stop-AndCleanup {
 # ============================================================
 
 function Show-Help {
-    Write-Host "`noc - Secure opencode wrapper`n" -ForegroundColor Cyan
-    Write-Host "Usage:" -ForegroundColor Yellow
+    Write-Host "`noc - Secure opencode wrapper" -ForegroundColor Cyan
+    Write-Host "AES-256-GCM encrypted API-key manager with server lifecycle.`n" -ForegroundColor Gray
+    Write-Host "USAGE:" -ForegroundColor Yellow
     Write-Host @"
   oc                          Start opencode (start server if needed, attach)
   oc serve                    Start a persistent server (foreground, shows logs)
@@ -546,7 +579,7 @@ function Show-Help {
   oc -Dir <path>              Attach with a specific working directory
   oc -Help                    Show this help`n
 "@
-    Write-Host "Workflow:" -ForegroundColor Yellow
+    Write-Host "WORKFLOW:" -ForegroundColor Yellow
     Write-Host @"
   1st run: oc            -> prompts for master password, starts password-protected server, attaches
   2nd run: oc            -> attaches directly (no master password), server stays alive
@@ -555,13 +588,13 @@ function Show-Help {
   oc serve -Status       -> show current mode
   oc serve -Restart      -> kill and restart with new password`n
 "@
-    Write-Host "Security:" -ForegroundColor Yellow
+    Write-Host "SECURITY:" -ForegroundColor Yellow
     Write-Host @"
   Server protected with auto-generated password stored in %USERPROFILE%\.oc\server-state.json
   Password stays the same when switching modes. Changes only on restart or fresh start.
   Background servers stop automatically after 15 minutes without an active session.`n
 "@
-    Write-Host "Flags:" -ForegroundColor Yellow
+    Write-Host "FLAGS:" -ForegroundColor Yellow
     Write-Host @"
   -Dir <path>      Working directory for attach
   -Background      Run server in background (for oc serve)
@@ -569,6 +602,19 @@ function Show-Help {
   -Restart         Restart server (for oc serve)
   -ShowValues      Show secret values (use with decrypt)
   -Help            Show this help`n
+"@
+    Write-Host "EXAMPLES:" -ForegroundColor Yellow
+    Write-Host @"
+  oc
+  oc serve
+  oc serve -Background
+  oc serve -Status
+  oc serve -Restart
+  oc encrypt
+  oc decrypt
+  oc stop
+  oc -Dir "C:\My Project"
+  oc -Help`n
 "@
 }
 
@@ -660,6 +706,7 @@ function Start-Main {
             Stop-AndCleanup
             return
         }
+        Sync-ServerPidFromPort
         Start-IdleWatchdog
         Write-Host "Server running on $serverUrl" -ForegroundColor Green
     }
@@ -671,21 +718,22 @@ function Start-Main {
     $workDir = if ($Dir) { [System.IO.Path]::GetFullPath($Dir) } else { (Get-Location).Path }
     $attachArgs += "--dir"; $attachArgs += $workDir
 
+$ocPath = Get-OpencodePath
     if ($state.password) {
-        $prevEnv = $env:OPENCODE_SERVER_PASSWORD
-        $env:OPENCODE_SERVER_PASSWORD = $state.password
-        try {
+            $prevEnv = $env:OPENCODE_SERVER_PASSWORD
+            $env:OPENCODE_SERVER_PASSWORD = $state.password
+            try {
+                $global:LASTEXITCODE = 0
+                & $ocPath $attachArgs
+            }
+            finally {
+                $env:OPENCODE_SERVER_PASSWORD = $prevEnv
+            }
+        }
+        else {
             $global:LASTEXITCODE = 0
-            & opencode $attachArgs
+            & $ocPath $attachArgs
         }
-        finally {
-            $env:OPENCODE_SERVER_PASSWORD = $prevEnv
-        }
-    }
-    else {
-        $global:LASTEXITCODE = 0
-        & opencode $attachArgs
-    }
 }
 
 function Serve-Main {
@@ -798,10 +846,8 @@ function Restart-KeepingPassword {
         Write-Host "Failed to restart server." -ForegroundColor Red
         return
     }
+    Sync-ServerPidFromPort
 
-    if ($FinalMode -eq "background") {
-        Set-ServerState -Mode "background" -Password $Password -ServerPid $serverPid
-    }
     $KeysObj = $null
     if ($FinalMode -eq "background") { Start-IdleWatchdog }
     Write-Host "Server running in background mode." -ForegroundColor Green
@@ -839,6 +885,7 @@ function Serve-Background {
         Stop-AndCleanup
         return
     }
+    Sync-ServerPidFromPort
     Start-IdleWatchdog
     Write-Host "Server running on $serverUrl (background)" -ForegroundColor Green
     Write-Host "Idle timeout: $([int]$script:idleTimeoutMinutes) min without activity" -ForegroundColor Gray
@@ -860,13 +907,17 @@ function Stop-Main {
 }
 
 function Session-Main {
+    if (-not (Assert-Opencode)) { return }
     $global:LASTEXITCODE = 0
-    if ($ExtraArgs) { & opencode session @ExtraArgs } else { opencode session }
+    $oc = Get-OpencodePath
+    if ($ExtraArgs) { & $oc session @ExtraArgs } else { & $oc session }
 }
 
 function Model-Main {
+    if (-not (Assert-Opencode)) { return }
     $global:LASTEXITCODE = 0
-    if ($ExtraArgs) { & opencode models @ExtraArgs } else { opencode models }
+    $oc = Get-OpencodePath
+    if ($ExtraArgs) { & $oc models @ExtraArgs } else { & $oc models }
 }
 
 # ============================================================

@@ -1,6 +1,6 @@
 # secure-oc
 
-A PowerShell wrapper that securely stores and injects API keys into [OpenCode](https://opencode.ai), the AI coding assistant.
+A PowerShell wrapper that securely stores and injects API keys into [opencode](https://opencode.ai), the AI coding assistant.
 
 Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) using **PBKDF2** (600,000 iterations, SHA-256) with a random salt and nonce, protected by a master password. The encrypted keys live in a single `api-keys.dat` file.
 
@@ -8,7 +8,7 @@ Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) usin
 
 | Command | Description |
 |---------|-------------|
-| `oc` | Start or attach to OpenCode (starts background server if needed) |
+| `oc` | Start or attach to opencode (starts background server if needed) |
 | `oc serve` | Start a persistent server in the **foreground** |
 | `oc serve -Background` | Start a persistent server as a **background daemon** |
 | `oc serve -Status` | Show server status (mode, password hint) |
@@ -16,6 +16,8 @@ Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) usin
 | `oc encrypt` | Encrypt and store API keys |
 | `oc decrypt` | List stored API key names |
 | `oc decrypt -ShowValues` | Show key values (use with care!) |
+| `oc session [args..]` | Manage opencode sessions |
+| `oc model [provider]` | List AI models |
 | `oc stop` | Stop the running server |
 | `oc -Dir <path>` | Attach with a specific working directory |
 | `oc -Help` | Show help |
@@ -42,7 +44,7 @@ When switching modes, the **server password is preserved** so active attach sess
 ### 1. Encrypt your API keys
 
 ```powershell
-.\oc.ps1 encrypt
+.\oc encrypt
 ```
 
 You will be prompted for:
@@ -54,19 +56,19 @@ Leave the key name empty to finish. An `api-keys.dat` file is created.
 ### 2. List stored keys
 
 ```powershell
-.\oc.ps1 decrypt
+.\oc decrypt
 ```
 
 Shows the names of all keys stored in the file. To also reveal the values (use with care):
 
 ```powershell
-.\oc.ps1 decrypt -ShowValues
+.\oc decrypt -ShowValues
 ```
 
-### 3. Launch OpenCode
+### 3. Launch opencode
 
 ```powershell
-.\oc.ps1
+.\oc
 ```
 
 - **First run:** prompts for your master password, starts a password-protected headless `opencode serve`, and attaches your TUI session. When you exit, the server stays alive.
@@ -76,28 +78,35 @@ Shows the names of all keys stored in the file. To also reveal the values (use w
 ### 4. Foreground persistent server
 
 ```powershell
-.\oc.ps1 serve
+.\oc serve
 ```
 
-Runs the server in the current terminal, showing OpenCode's logs. Close the terminal or press Ctrl+C to stop. Other terminals can still attach.
+Runs the server in the current terminal, showing opencode's logs. Close the terminal or press Ctrl+C to stop. Other terminals can still attach.
 
 ### 5. Background persistent server (daemon)
 
 ```powershell
-.\oc.ps1 serve -Background
+.\oc serve -Background
 ```
 
 Runs the server in the background, surviving terminal closure. Stop it manually:
 
 ```powershell
-.\oc.ps1 stop
+.\oc stop
 ```
 
 ### 6. Inspect and restart
 
+- Show mode, password hint:
+
 ```powershell
-.\oc.ps1 serve -Status     # Show mode, password hint
-.\oc.ps1 serve -Restart    # Kill and restart with a NEW password
+.\oc serve -Status
+```
+
+- Kill and restart with a NEW password:
+
+```powershell
+.\oc serve -Restart
 ```
 
 ## Server lifecycle
@@ -112,7 +121,7 @@ Runs the server in the background, surviving terminal closure. Stop it manually:
 
 ## Security
 
-The OpenCode server is protected by an **auto-generated random password** created each time the server starts:
+The opencode server is protected by an **auto-generated random password** created each time the server starts:
 
 - Password is generated from a cryptographically random GUID
 - Set via `OPENCODE_SERVER_PASSWORD` environment variable in the server process only (never in the parent session)
@@ -122,6 +131,8 @@ The OpenCode server is protected by an **auto-generated random password** create
 - `oc attach` passes the password via `OPENCODE_SERVER_PASSWORD` environment variable (never as a CLI argument)
 - Other processes on the same machine **cannot connect** without the password
 - Background servers run an **idle watchdog**: after 15 minutes without an active session, the server is stopped and the state file is removed
+- Server process working directory is set to **`$HOME`** — the project directory is never locked, allowing rename/move while the server is running
+- Due to a Windows limitation (`CreateProcess` cannot run `.ps1` files directly), if `opencode` resolves to a `.ps1` wrapper (e.g. npm install), the script transparently switches to the `.cmd` wrapper in the same directory, then corrects the stored PID via the server port to ensure `oc stop` targets the real process
 
 The master password for `api-keys.dat` is **never stored** — it is prompted each time a server starts.
 
@@ -135,5 +146,5 @@ All runtime state lives in `%USERPROFILE%\.oc\`:
 
 ## Requirements
 
-- PowerShell 5+ (`pwsh` recommended)
-- [OpenCode](https://opencode.ai) installed and available in `PATH`
+- PowerShell 5.1+ ([PowerShell 7](https://learn.microsoft.com/en-us/powershell/) recommended)
+- [opencode](https://opencode.ai) installed and available in `PATH`
