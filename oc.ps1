@@ -16,9 +16,12 @@ param(
     [string[]]$ExtraArgs
 )
 
-$dataPath   = Join-Path $PSScriptRoot "api-keys.dat"
-$stateDir   = Join-Path $env:USERPROFILE ".oc"
-$statePath  = Join-Path $stateDir "server-state.json"
+$dataPath = Join-Path $PSScriptRoot "api-keys.dat"
+$homeDir  = if ($env:HOME) { $env:HOME } else { $HOME }
+$stateDir = Join-Path $homeDir ".oc"
+$statePath = Join-Path $stateDir "server-state.json"
+$serverPort = 4096
+$serverUrl = "http://localhost:$serverPort"
 $serverPort = 4096
 $serverUrl  = "http://localhost:$serverPort"
 
@@ -76,15 +79,20 @@ function Set-StateFilePermissions {
     catch {}
 }
 
+
 function Get-MasterPassword {
-    # The master password never leaves memory; callers null it once the key is derived.
     param([string]$UserName, [string]$Message)
+
     $cred = Get-Credential -UserName $UserName -Message $Message
-    $bstr  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($cred.Password)
-    $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-    return $plain
+    if ($null -eq $cred) {
+        throw "Password input cancelled."
+    }
+
+    return [System.Net.NetworkCredential]::new(
+        "", $cred.Password
+    ).Password
 }
+
 
 function Get-AesKey {
     param([string]$Password, [byte[]]$Salt)
@@ -711,29 +719,27 @@ function Start-Main {
         Write-Host "Server running on $serverUrl" -ForegroundColor Green
     }
 
-    $state = Get-ServerState
-    if ($state -and $state.mode -eq "background") { Update-ServerActivity }
-    $attachArgs = @("attach", $serverUrl)
+    $workDir = if ($Dir) {
+        [System.IO.Path]::GetFullPath($Dir)
+    } else {
+        (Get-Location).Path
+    }
 
-    $workDir = if ($Dir) { [System.IO.Path]::GetFullPath($Dir) } else { (Get-Location).Path }
-    $attachArgs += "--dir"; $attachArgs += $workDir
+    $ocPath = Get-OpencodePath
+    $prevEnv = $env:OPENCODE_SERVER_PASSWORD
 
-$ocPath = Get-OpencodePath
     if ($state.password) {
-            $prevEnv = $env:OPENCODE_SERVER_PASSWORD
-            $env:OPENCODE_SERVER_PASSWORD = $state.password
-            try {
-                $global:LASTEXITCODE = 0
-                & $ocPath $attachArgs
-            }
-            finally {
-                $env:OPENCODE_SERVER_PASSWORD = $prevEnv
-            }
-        }
-        else {
-            $global:LASTEXITCODE = 0
-            & $ocPath $attachArgs
-        }
+        $env:OPENCODE_SERVER_PASSWORD = $state.password
+    }
+
+    try {
+        $global:LASTEXITCODE = 0
+        & $ocPath --server $serverUrl $workDir @ExtraArgs
+    }
+    finally {
+        $env:OPENCODE_SERVER_PASSWORD = $prevEnv
+    }
+
 }
 
 function Serve-Main {
