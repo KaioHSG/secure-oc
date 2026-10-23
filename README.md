@@ -81,6 +81,7 @@ The command name depends on how you got it: the release binary is `oc`, a
 | `oc reveal --print` | Print key values (asks for confirmation) |
 | `oc stop` | Stop the running server |
 | `oc --dir <path>` | Attach with a specific working directory |
+| `oc --opencode <path>` | Use a specific opencode binary (or set `SECURE_OC_OPENCODE`) |
 | `oc session [args..]` | Manage opencode sessions |
 | `oc model [args..]` | List AI models |
 | `oc --help` | Show help |
@@ -205,6 +206,17 @@ Everything lives under `~/.oc/`:
 Set `SECURE_OC_HOME` to relocate the whole directory, and `SECURE_OC_PORT` to
 change the server port (default `4096`).
 
+### Finding the opencode binary
+
+`oc` resolves `opencode` in this order:
+
+1. `oc --opencode <path>`
+2. the `SECURE_OC_OPENCODE` environment variable
+3. `PATH`
+
+Use the first two when opencode is not on `PATH` — for example in a terminal
+profile or editor that launches `oc` without a shell.
+
 ## Migrating from the PowerShell version
 
 The container format changed, so old `api-keys.dat` files are **not** read.
@@ -212,4 +224,4 @@ Re-run `oc encrypt` once and delete the old `api-keys.dat`.
 
 ## License
 
-MIT
+GPL-3

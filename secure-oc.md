@@ -125,8 +125,12 @@ new server's state.
 
 ### opencode resolution
 
+Resolved in this order: `--opencode <path>`, the `SECURE_OC_OPENCODE`
+environment variable, then `PATH`. An explicit path that does not exist is a
+hard error; the `.ps1` → `.cmd` swap only applies to the `PATH` lookup.
+
 ```python
-path = shutil.which("opencode")
+path = explicit or os.environ.get("SECURE_OC_OPENCODE") or shutil.which("opencode")
 # CreateProcess cannot run a .ps1 wrapper; npm ships a .cmd sibling
 if path.endswith(".ps1") and exists(path[:-4] + ".cmd"):
     return path[:-4] + ".cmd"
@@ -183,6 +187,7 @@ oc stop
 oc session [args..]
 oc model [args..]
 oc --dir <path>
+oc --opencode <path>
 oc --help
 ```
 

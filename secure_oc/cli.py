@@ -21,6 +21,8 @@ IDLE_TIMEOUT_MIN = 15
 _FLAG_ALIASES = {
     "-dir": "dir",
     "--dir": "dir",
+    "-opencode": "opencode",
+    "--opencode": "opencode",
     "-showvalues": "show_values",
     "--show-values": "show_values",
     "-background": "background",
@@ -40,9 +42,14 @@ _FLAG_ALIASES = {
 }
 
 
+# Flags that take a value instead of being a boolean switch.
+_VALUE_FLAGS = {"dir", "opencode"}
+
+
 def _parse(argv: list) -> tuple[list, dict]:
     opts = {
         "dir": None,
+        "opencode": None,
         "show_values": False,
         "background": False,
         "status": False,
@@ -58,11 +65,11 @@ def _parse(argv: list) -> tuple[list, dict]:
         key = _FLAG_ALIASES.get(token.lower())
         if key is None:
             positional.append(token)
-        elif key == "dir":
+        elif key in _VALUE_FLAGS:
             index += 1
             if index >= len(argv):
-                raise ConfigError("-Dir requires a path argument")
-            opts["dir"] = argv[index]
+                raise ConfigError(f"{token} requires a path argument")
+            opts[key] = argv[index]
         else:
             opts[key] = True
         index += 1
@@ -347,9 +354,9 @@ def cmd_stop() -> int:
     return 0
 
 
-def _start_background(keys: dict, password: str) -> bool:
+def _start_background(keys: dict, password: str, opencode: Optional[str]) -> bool:
     try:
-        process = server.start(keys, password, PORT, background=True)
+        process = server.start(keys, password, PORT, background=True, opencode=opencode)
     except OSError as exc:
         ui.error(f"Failed to start server: {exc}")
         return False
@@ -367,9 +374,9 @@ def _start_background(keys: dict, password: str) -> bool:
     return True
 
 
-def _serve_foreground(keys: dict, password: str) -> int:
+def _serve_foreground(keys: dict, password: str, opencode: Optional[str]) -> int:
     try:
-        process = server.start(keys, password, PORT, background=False)
+        process = server.start(keys, password, PORT, background=False, opencode=opencode)
     except OSError as exc:
         ui.error(f"Failed to start server: {exc}")
         return 1
@@ -397,7 +404,9 @@ def _serve_foreground(keys: dict, password: str) -> int:
     return 0
 
 
-def _restart_keeping_password(keys: dict, password: str, final_mode: str) -> int:
+def _restart_keeping_password(
+    keys: dict, password: str, final_mode: str, opencode: Optional[str]
+) -> int:
     current = state.load()
     previous_pid = current.pid if current else 0
     state.save("transition", password, previous_pid, transition=True)
@@ -405,7 +414,7 @@ def _restart_keeping_password(keys: dict, password: str, final_mode: str) -> int
         server.stop(previous_pid)
 
     try:
-        process = server.start(keys, password, PORT, background=True)
+        process = server.start(keys, password, PORT, background=True, opencode=opencode)
     except OSError as exc:
         ui.error(f"Failed to start server: {exc}")
         return 1
@@ -422,9 +431,11 @@ def _restart_keeping_password(keys: dict, password: str, final_mode: str) -> int
     return 0
 
 
-def _attach(password: Optional[str], workdir: str, extra: list) -> int:
+def _attach(
+    password: Optional[str], workdir: str, extra: list, opencode: Optional[str]
+) -> int:
     try:
-        binary = server.find_opencode()
+        binary = server.find_opencode(opencode)
     except ConfigError as exc:
         ui.error(str(exc))
         return 1
@@ -445,7 +456,7 @@ def _attach(password: Optional[str], workdir: str, extra: list) -> int:
 
 def cmd_start(opts: dict, extra: list) -> int:
     try:
-        server.find_opencode()
+        server.find_opencode(opts["opencode"])
     except ConfigError as exc:
         ui.error(str(exc))
         return 1
@@ -476,7 +487,9 @@ def cmd_start(opts: dict, extra: list) -> int:
         password = generate_password()
         ui.accent("Starting server...")
         try:
-            process = server.start(keys, password, PORT, background=True)
+            process = server.start(
+                keys, password, PORT, background=True, opencode=opts["opencode"]
+            )
         except OSError as exc:
             ui.error(f"Failed to start server: {exc}")
             return 1
@@ -497,18 +510,20 @@ def cmd_start(opts: dict, extra: list) -> int:
         state.set_activity()
 
     workdir = os.path.abspath(opts["dir"]) if opts["dir"] else os.getcwd()
-    return _attach(password, workdir, extra)
+    return _attach(password, workdir, extra, opts["opencode"])
 
 
 def cmd_serve(opts: dict) -> int:
+    # `--status` only reads the state file and the port, so it must not
+    # require opencode (or the key store) to be resolvable.
+    if opts["status"]:
+        return cmd_status()
+
     try:
-        server.find_opencode()
+        server.find_opencode(opts["opencode"])
     except ConfigError as exc:
         ui.error(str(exc))
         return 1
-
-    if opts["status"]:
-        return cmd_status()
 
     if not paths.KEYS_PATH.exists():
         ui.error("No key store found. Run 'oc encrypt' first.")
@@ -526,9 +541,9 @@ def cmd_serve(opts: dict) -> int:
             return 1
         new_password = generate_password()
         if previous_mode == "foreground":
-            result = _serve_foreground(keys, new_password)
+            result = _serve_foreground(keys, new_password, opts["opencode"])
         else:
-            result = 0 if _start_background(keys, new_password) else 1
+            result = 0 if _start_background(keys, new_password, opts["opencode"]) else 1
         del keys
         return result
 
@@ -537,7 +552,7 @@ def cmd_serve(opts: dict) -> int:
             keys = _load_keys()
             if keys is None:
                 return 1
-            result = 0 if _start_background(keys, generate_password()) else 1
+            result = 0 if _start_background(keys, generate_password(), opts["opencode"]) else 1
             del keys
             return result
 
@@ -549,7 +564,9 @@ def cmd_serve(opts: dict) -> int:
             keys = _load_keys()
             if keys is None or not current.password:
                 return 1
-            result = _restart_keeping_password(keys, current.password, "background")
+            result = _restart_keeping_password(
+                keys, current.password, "background", opts["opencode"]
+            )
             del keys
             return result
         if current and current.mode == "background":
@@ -577,21 +594,21 @@ def cmd_serve(opts: dict) -> int:
         if keys is None or not current or not current.password:
             return 1
         server.stop(current.pid)
-        result = _serve_foreground(keys, current.password)
+        result = _serve_foreground(keys, current.password, opts["opencode"])
         del keys
         return result
 
     keys = _load_keys()
     if keys is None:
         return 1
-    result = _serve_foreground(keys, generate_password())
+    result = _serve_foreground(keys, generate_password(), opts["opencode"])
     del keys
     return result
 
 
 def _passthrough(opts: dict, extra: list, subcommand: str) -> int:
     try:
-        binary = server.find_opencode()
+        binary = server.find_opencode(opts["opencode"])
     except ConfigError as exc:
         ui.error(str(exc))
         return 1
@@ -623,6 +640,7 @@ def show_help() -> None:
   oc reveal --print           Print values to the terminal (asks for confirmation)
   oc stop                     Stop the running server
   oc --dir <path>             Attach with a specific working directory
+  oc --opencode <path>        Use a specific opencode binary (or set SECURE_OC_OPENCODE)
   oc --help                   Show this help
 """
     )
@@ -640,6 +658,7 @@ def show_help() -> None:
   Secret store: {secrets_store.backend_name()}
   Server password is kept out of the state file and never passed on the command line.
   Values are hidden while typing and are never echoed unless you ask with --print.
+  opencode is resolved from --opencode, then SECURE_OC_OPENCODE, then PATH.
 """
     )
 

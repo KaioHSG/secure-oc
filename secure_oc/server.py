@@ -42,16 +42,42 @@ def _psutil():
 # --------------------------------------------------------------------------
 
 
-def find_opencode() -> str:
-    path = shutil.which("opencode")
-    if not path:
-        raise ConfigError("'opencode' not found in PATH. Install it: https://opencode.ai")
+ENV_OPENCODE = "SECURE_OC_OPENCODE"
+
+
+def _normalize_opencode(path: str) -> str:
     # CreateProcess cannot execute a .ps1 wrapper; npm ships a .cmd sibling.
     if path.lower().endswith(".ps1"):
         candidate = path[:-4] + ".cmd"
         if os.path.exists(candidate):
             return candidate
     return path
+
+
+def find_opencode(explicit: Optional[str] = None) -> str:
+    """Resolve the opencode binary.
+
+    Order of precedence: the explicit path (``--opencode``), the
+    ``SECURE_OC_OPENCODE`` environment variable, then ``PATH``.
+    """
+    for source, candidate in (
+        ("--opencode", explicit),
+        (ENV_OPENCODE, os.environ.get(ENV_OPENCODE)),
+    ):
+        if not candidate:
+            continue
+        if not os.path.exists(candidate):
+            raise ConfigError(f"{source} points to a file that does not exist: {candidate}")
+        return _normalize_opencode(candidate)
+
+    found = shutil.which("opencode")
+    if found:
+        return _normalize_opencode(found)
+
+    raise ConfigError(
+        "'opencode' not found in PATH. Install it: https://opencode.ai\n"
+        "Or point at it with --opencode <path> / SECURE_OC_OPENCODE."
+    )
 
 
 def build_env(keys: dict, server_password: Optional[str]) -> dict:
@@ -98,9 +124,16 @@ def _detach_kwargs() -> dict:
     return kwargs
 
 
-def start(keys: dict, password: str, port: int, *, background: bool) -> subprocess.Popen:
+def start(
+    keys: dict,
+    password: str,
+    port: int,
+    *,
+    background: bool,
+    opencode: Optional[str] = None,
+) -> subprocess.Popen:
     """Start ``opencode serve`` and return the Popen handle."""
-    binary = find_opencode()
+    binary = find_opencode(opencode)
     args = [binary, "serve", "--port", str(port)]
     env = build_env(keys, password)
     cwd = str(Path.home())
