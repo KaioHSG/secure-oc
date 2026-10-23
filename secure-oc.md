@@ -2,273 +2,209 @@
 
 ## What it is
 
-`secure-oc` is a PowerShell wrapper around [opencode](https://opencode.ai) that:
+`secure-oc` is a Python wrapper around [opencode](https://opencode.ai) that:
 
-1. **Stores API keys securely** — encrypts them with AES-256 + PBKDF2, protected by a master password you type at runtime
-2. **Manages the opencode server lifecycle** — starts, stops, and switches between foreground/background modes while preserving the server password
-3. **Protects the server** — auto-generates a random password for each server instance so other processes on the same machine cannot connect without it
+1. **Stores API keys securely** — Argon2id + AES-256-GCM, protected by a master
+   password typed at runtime.
+2. **Manages the opencode server lifecycle** — starts, stops and switches
+   between foreground/background modes while preserving the server password.
+3. **Protects the server** — a random password per server instance, kept out of
+   the state file and out of the command line.
 
----
+It replaces the original single-file `oc.ps1` implementation.
 
-## How the encryption works
+## Module map
 
-### Key storage file: `api-keys.dat`
+| Module | Responsibility |
+|--------|----------------|
+| `secure_oc/cli.py` | Argument parsing, commands, prompts, attach |
+| `secure_oc/crypto.py` | Container format, KDF, AES-256-GCM |
+| `secure_oc/secrets_store.py` | At-rest protection of small secrets (keyring/DPAPI/key file) |
+| `secure_oc/state.py` | Server state file, HMAC integrity, password reference |
+| `secure_oc/server.py` | opencode resolution, process/port management, watchdog |
+| `secure_oc/paths.py` | Directory layout and permission hardening |
+| `secure_oc/ui.py` | Coloured console output |
+| `secure_oc/errors.py` | Exception hierarchy |
+
+## Key store
+
+### Container format (`keys.dat`)
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│ Salt (16 bytes) │ Nonce (12 bytes) │ Ciphertext │ Tag (16 B)  │
-└───────────────────────────────────────────────────────────────┘
+┌──────────┬────────────┬──────────────┬────────┬─────────┬──────────────────────┐
+│ magic    │ header_len │ header       │ salt   │ nonce   │ ciphertext ‖ tag     │
+│ "SOC2"   │ uint32 BE  │ UTF-8 JSON   │ 16 B   │ 12 B    │ AES-256-GCM ‖ 16 B   │
+└──────────┴────────────┴──────────────┴────────┴─────────┴──────────────────────┘
 ```
 
-- **Salt** — random, generated once per file via `RandomNumberGenerator`
-- **Nonce** — random 12-byte nonce, generated per file
-- **Ciphertext** — AES-256-GCM encrypted JSON of key-value pairs
-- **Tag** — 16-byte GCM authentication tag; tampering is detected on decrypt
+The header records the version, cipher and KDF parameters, for example:
+
+```json
+{"alg":"AES-256-GCM","kdf":"argon2id","m":65536,"nonce_len":12,"p":4,"salt_len":16,"t":3,"v":2}
+```
+
+`magic ‖ header` is passed to AES-GCM as **associated data**, so the KDF
+parameters cannot be downgraded without failing authentication.
 
 ### Key derivation
 
 ```
-Master Password + Salt
-        ↓
-  PBKDF2 (SHA-256, 600,000 iterations)
-        ↓
-   32-byte AES key
-        ↓
-  AES-256-GCM decrypt(Nonce, Ciphertext, Tag)
-        ↓
-  JSON: { "OPENROUTER_API_KEY": "sk-...", "OPENAI_API_KEY": "sk-..." }
+Master password + salt
+        │
+        ├─ Argon2id (t=3, m=64 MiB, p=4)      ← preferred (argon2-cffi)
+        ├─ scrypt   (n=2^16, r=8, p=1)        ← fallback (stdlib)
+        └─ PBKDF2-SHA256 (600 000 iterations) ← last resort (stdlib)
+        │
+    32-byte AES key
+        │
+   AES-256-GCM decrypt(nonce, ciphertext, tag, aad = magic ‖ header)
+        │
+   JSON: { "OPENROUTER_API_KEY": "sk-..." }
 ```
 
-GCM provides both confidentiality and integrity: any modification to the
-file (or a wrong password) makes decryption fail with an authentication
-error. The master password is **never stored** — it is prompted at runtime
-via `Get-Credential` and erased from memory immediately after use.
+The algorithm actually used is recorded in the header, so a file written on a
+machine with Argon2id stays readable (or fails with a clear message) elsewhere.
 
----
+## Secret store (`secrets_store.py`)
 
-## Server modes
+Small secrets — the server password and the state HMAC key — are stored under
+a label, protected by the strongest backend available:
 
-The server runs in one of two modes, tracked in the state file:
+| Order | Backend | Notes |
+|-------|---------|-------|
+| 1 | OS keyring | Windows Credential Manager, macOS Keychain, Secret Service |
+| 2 | Windows DPAPI | via `ctypes` (`CryptProtectData`), bound to user + machine |
+| 3 | Local key file | random 32-byte key at `secrets/.key` (`0600`) encrypting the secret with AES-GCM |
 
-| Mode | `state.mode` | Blocking? | Password changes? |
-|------|--------------|-----------|-------------------|
-| Foreground | `"foreground"` | Yes (terminal blocks) | On fresh start or restart |
-| Background | `"background"` | No (daemon) | On fresh start or restart |
+Each stored file carries a one-byte scheme prefix so retrieval is unambiguous.
+The active backend is reported by `oc --help`.
 
-Background servers are watched by an **idle watchdog** (a detached `pwsh`
-process spawned at server start). It refreshes `lastActivity` while
-established connections exist and, once the last session has been closed
-for `$idleTimeoutSecs` (default 15 minutes), stops the server and removes
-the state file. Foreground servers are unaffected — closing the terminal
-is what ends them.
+## Server state (`state.py`)
 
-### State file: `%USERPROFILE%\.oc\server-state.json`
+`~/.oc/server-state.json`:
 
 ```json
 {
   "mode": "foreground|background|transition",
-  "passwordEnc": "<DPAPI-encrypted base64>",
   "pid": 12345,
   "transition": false,
-  "hmac": "<HMAC-SHA256 base64>",
-  "lastActivity": 1755100000
+  "hmac": "<base64 HMAC-SHA256>",
+  "lastActivity": 1792756237
 }
 ```
 
 | Field | Purpose |
 |-------|---------|
-| `mode` | Current server mode (or `"transition"` during a mode switch) |
-| `passwordEnc` | Server password encrypted via **DPAPI** (Windows Data Protection API, bound to current user + machine). On non-Windows, falls back to plaintext with a warning. |
+| `mode` | Current server mode (`transition` while switching) |
 | `pid` | Process ID of the `opencode serve` process |
-| `transition` | `true` while a mode switch is in progress (prevents stale cleanup) |
-| `hmac` | HMAC-SHA256 for **integrity verification**. Tampered state files are detected and flagged with a warning. |
-| `lastActivity` | Unix timestamp of the last attach / active session (updated by `oc` on attach and by the watchdog while sessions are connected). |
+| `transition` | `true` during a mode switch, to suppress stale cleanup |
+| `hmac` | HMAC-SHA256 over the canonical form of the fields, keyed by an **independent** secret from the keyring |
+| `lastActivity` | Unix timestamp refreshed on attach and by the watchdog |
 
-The state file and its parent directory have **restrictive ACLs** applied, leaving only the current user (FullControl). This prevents other local accounts from reading the file.
+**The password is not in this file.** It is fetched from the secret store by
+label. This removes the previous design where the HMAC key was derived from the
+very password stored in the same file — a circular scheme that did not protect
+against an attacker able to decrypt the file.
 
----
+Writes are atomic (`write_private`: temp file → `os.replace`) and the file is
+hardened (`0600` / current-user ACL).
 
-## Mode switching
+## Server modes
 
-Switching between modes is designed to be **seamless** and **preserve active sessions**:
+| Mode | Entered with | Blocking | Password changes |
+|------|--------------|----------|------------------|
+| Foreground | `oc serve` | Yes (terminal blocks) | On fresh start or restart |
+| Background | `oc` / `oc serve --background` | No (daemon) | On fresh start or restart |
 
-```
-    foreground ────── serve -Background ──────→ background
-         │
-         └──── (kill) ───────── serve ──────────────→ foreground
-```
-
-### How a switch works (foreground → background example)
-
-```
-Terminal A (foreground server)         Terminal B (oc serve -Background)
-──────────────────────────────         ──────────────────────────────────
-opencode serve (PID=F)                 
-                                      1. Read state (mode=foreground, pid=F, pw)
-                                      2. Ask master password, decrypt keys
-                                      3. Write state → transition=true
-                                      4. Stop-ServerProcess → kill PID=F
-Process F dies ←──────────────────────
-WaitForExit() returns
-  read state (mode=transition)
-  → transition=true → skip cleanup
-                                                                          
-                                      5. Start-ServerProcess → PID=B
-                                      6. Write state → mode=background,
-                                         pid=B, transition=false
-                                      7. Server running in background
-```
-
-### Why the transition flag is needed
-
-Without it, a race condition occurs:
-
-1. Terminal B kills PID F (step 4)
-2. Terminal A's cleanup runs at the same time as Terminal B's step 5
-3. If Terminal A reads the state before Terminal B writes it (step 6), the state still shows `pid=F`. Since `F == myPid`, the cleanup would **delete the state**, corrupting the new server.
-
-The `transition` marker closes this window: Terminal B writes `transition=true` **before** killing, so Terminal A's cleanup sees `transition=true` and skips cleanup regardless of PID.
-
----
+Mode switches **preserve the password** so active `opencode attach` sessions
+stay authenticated. A `transition` flag is written *before* killing the old
+process, closing the race where the dying process's cleanup could delete the
+new server's state.
 
 ## Process management
 
-### Opencode resolution (`Get-OpencodePath`)
+### opencode resolution
 
-Instead of hardcoding `"opencode"` as the process name, the script resolves the
-actual binary path via `Get-Command`:
-
-```
-Get-Command opencode
-       ↓
-  $path = $cmd.Source
-       ↓
-  [IO.Path]::GetExtension($path) == '.ps1' ? → swap to .cmd (npm sibling)
-       ↓
-  return path  (.exe | .cmd | shell script)
+```python
+path = shutil.which("opencode")
+# CreateProcess cannot run a .ps1 wrapper; npm ships a .cmd sibling
+if path.endswith(".ps1") and exists(path[:-4] + ".cmd"):
+    return path[:-4] + ".cmd"
 ```
 
-| Platform | Get-Command returns | Used as | PID is correct? |
-|----------|-------------------|---------|-----------------|
-| Windows (WinGet) | `opencode.exe` | Filename directly | Yes |
-| Windows (npm) | `opencode.ps1` | Swapped to `opencode.cmd` | No — PID is `cmd.exe`, corrected via port |
-| Linux (npm) | `/usr/bin/opencode` (shell script) | Filename directly | Yes — shell uses `exec`, replaces itself |
+### Launching
 
-### Working directory
+`subprocess.Popen([opencode, "serve", "--port", PORT], cwd=Path.home(), env=...)`
 
-The server process working directory is set to `$HOME` instead of the project
-directory (`$PSScriptRoot`). This prevents Windows from locking the project
-folder while the server is running, allowing the user to rename or move it.
+- **Background:** `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`
+  on Windows, `start_new_session=True` on POSIX, with stdio to `DEVNULL`.
+- **Foreground:** a normal child process; the parent blocks on `wait()`.
+- The environment is the parent's plus the injected API keys and
+  `OPENCODE_SERVER_PASSWORD`; the parent's own environment is never modified.
+- The working directory is the home directory so the project folder is not
+  locked.
 
-### PID correction (`Sync-ServerPidFromPort`)
+### PID correction
 
-When the `.cmd` wrapper is used (Windows npm), `[System.Diagnostics.Process]::Start()`
-returns the PID of `cmd.exe`, not of `opencode.exe`. Storing the wrapper PID in the
-state file would make `oc stop` kill `cmd.exe` while `opencode.exe` keeps running
-on port 4096, becoming an orphan.
+When the npm `.cmd` wrapper is used, the returned PID is `cmd.exe`, not
+`opencode`. After the port is listening, `listener_pid()` (psutil, else
+`netstat`/`ss`) finds the real owner and the state file is corrected.
 
-After the server confirms it is listening on the port, `Sync-ServerPidFromPort`
-queries `Get-NetTCPConnection -LocalPort 4096` and updates the state file with
-the real PID:
+### Stopping
 
-```powershell
-function Sync-ServerPidFromPort {
-    $realPid = $script:serverPid
-    try {
-        $conn = Get-NetTCPConnection -LocalPort $serverPort -State Listen |
-                    Select-Object -First 1
-        if ($conn -and $conn.OwningProcess) { $realPid = $conn.OwningProcess }
-    } catch {}
-    if ($realPid -and $realPid -ne $script:serverPid) {
-        # correct state file with the real opencode.exe PID
-    }
-}
-```
+Priority: state-file PID → the process owning the server port. The server is
+never matched **by name** (which would kill attach clients too). Uses psutil
+`terminate()`/`kill()`, else `taskkill /PID /T /F` (Windows) or `SIGTERM`.
 
-On Linux this function is a no-op (`Get-NetTCPConnection` does not exist) —
-unnecessary because the shell script uses `exec` so the PID is already correct.
+## Idle watchdog
 
-### Background server (`Start-ServerProcess`)
+`oc serve --background` spawns a detached `python -m secure_oc __watchdog`
+process (no base64-encoded script, unlike the PowerShell version). Every 60 s
+it:
 
-```
-[System.Diagnostics.ProcessStartInfo]
-  FileName = Get-OpencodePath  (resolved binary)
-  Arguments = "serve --port 4096"
-  UseShellExecute = false
-  CreateNoWindow = true
-  WorkingDirectory = $HOME
-  EnvironmentVariables = parent env + API keys + OPENCODE_SERVER_PASSWORD
-        ↓
-[System.Diagnostics.Process]::Start($psi)
-        ↓
-PID stored in $script:serverPid + state file (later corrected via port)
-```
+1. reads `lastActivity`;
+2. if the idle time exceeds the timeout, re-checks the PID has not changed;
+3. counts established connections — if any (or if the count is **unknown**), it
+   refreshes `lastActivity` and keeps the server alive;
+4. otherwise stops the server and clears the state.
 
-- The process is **independent** of the PowerShell session — survives terminal closure
-- No stdout/stderr redirection (avoids buffer deadlock)
-- Environment includes parent's PATH + injected API keys (ONLY in the child process — parent session is never polluted)
-- Working directory is `$HOME` to avoid locking project folders
+Being conservative when the connection count is unknown prevents the watchdog
+from killing a server that is actually busy.
 
-### Foreground server (`Start-ForegroundProcess`)
+## CLI
 
 ```
-[System.Diagnostics.ProcessStartInfo]
-  FileName = Get-OpencodePath  (resolved binary)
-  Arguments = "serve --port 4096"
-  UseShellExecute = false
-  CreateNoWindow = false
-  WorkingDirectory = $HOME
-  EnvironmentVariables = parent env + API keys + OPENCODE_SERVER_PASSWORD
-        ↓
-[System.Diagnostics.Process]::Start($psi)
-Start-Sleep 500ms  ← brief wait for port binding
-Sync-ServerPidFromPort  ← correct PID
-Set-ServerState
-$process.WaitForExit()  ← blocks the terminal
+oc                          Start opencode (start server if needed, attach)
+oc serve [--background|--status|--restart]
+oc encrypt
+oc decrypt
+oc reveal [--print]
+oc stop
+oc session [args..]
+oc model [args..]
+oc --dir <path>
+oc --help
 ```
 
-### Stopping a server (`Stop-ServerProcess`)
-
-```powershell
-$targetPid = $script:serverPid ?? $state.pid ?? Get-NetTCPConnection(port 4096)
-Get-Process -Id $targetPid | Kill
-```
-
-Priority:
-1. `$script:serverPid` — in-session PID (for background servers started in this session)
-2. `$state.pid` — PID from the state file (cross-session)
-3. `Get-NetTCPConnection` — fallback by finding the process on port 4096
-
-Never falls back to `Get-Process -Name "opencode" | Stop-Process` (which would kill all opencode processes including attach clients).
-
----
-
-## Password management
-
-| Event | Password behavior |
-|-------|-------------------|
-| Fresh `oc` (no server) | New password generated |
-| `oc serve` (fresh) | New password generated |
-| `oc serve -Background` (fresh) | New password generated |
-| Mode switch (fore↔back) | **Same password preserved** |
-| `oc serve -Restart` | New password generated |
-| `oc stop` | Server killed, no new password |
-
-When switching modes, the password is kept the same so that active `opencode attach` sessions remain authenticated. The new server process is started with `OPENCODE_SERVER_PASSWORD` set to the existing password.
-
----
+- Secrets are read with `getpass` (hidden) on a TTY; when stdin is not a TTY
+  they are read as a line, so the tool can be scripted and tested.
+- `oc reveal` copies values to the clipboard; it never prints them unless
+  `--print` is given **and** the user confirms.
 
 ## Key files
 
 | Path | Purpose |
 |------|---------|
-| `oc.ps1` | Main script (PowerShell) |
-| `oc` | Shell launcher for Linux/macOS (`exec pwsh oc.ps1 "$@"`) |
-| `api-keys.dat` | Encrypted API key storage |
+| `secure_oc/` | Python package |
+| `oc`, `oc.cmd`, `oc.ps1` | Launchers (sh, cmd.exe, PowerShell) |
+| `~/.oc/keys.dat` | Encrypted API keys |
+| `~/.oc/server-state.json` | Server state (no password) |
+| `~/.oc/secrets/` | Secret-store files when no keyring is available |
 | `README.md` | Usage documentation |
-| `%USERPROFILE%\.oc\server-state.json` | Server state (mode, DPAPI-encrypted password, PID, HMAC) |
+| `secure-oc.md` | This document |
 
 ## Requirements
 
-- PowerShell 5.1+ ([PowerShell 7](https://learn.microsoft.com/en-us/powershell/) recommended)
-- [opencode](https://opencode.ai) installed and available in `PATH`
+- Python 3.9+
+- `cryptography` (required); `argon2-cffi`, `keyring`, `psutil` (recommended)
+- opencode available in `PATH`

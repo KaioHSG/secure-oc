@@ -1,150 +1,190 @@
 # secure-oc
 
-A PowerShell wrapper that securely stores and injects API keys into [opencode](https://opencode.ai), the AI coding assistant.
+A Python wrapper that securely stores and injects API keys into
+[opencode](https://opencode.ai) and manages the lifecycle of its local server.
 
-Your API keys are encrypted with **AES-256-GCM** (authenticated encryption) using **PBKDF2** (600,000 iterations, SHA-256) with a random salt and nonce, protected by a master password. The encrypted keys live in a single `api-keys.dat` file.
+Your API keys are encrypted with **AES-256-GCM** (authenticated encryption)
+using a key derived with **Argon2id** (falling back to scrypt/PBKDF2 when
+`argon2-cffi` is unavailable), protected by a master password you type at
+runtime. The encrypted keys live in a single file under your home directory,
+never in the project you are working on.
+
+The server password is kept out of the state file entirely: it lives in your
+**OS keyring** (Windows Credential Manager, macOS Keychain, freedesktop Secret
+Service), or DPAPI on Windows, and is never passed on the command line.
+
+## Requirements
+
+- **Python 3.9+**
+- [opencode](https://opencode.ai) installed and available in `PATH`
+- `cryptography` (required)
+- `argon2-cffi`, `keyring`, `psutil` (recommended — see below)
+
+## Install
+
+```sh
+python -m pip install -r requirements.txt
+```
+
+or, as an editable package that provides a `secure-oc` entry point:
+
+```sh
+python -m pip install -e ".[full]"
+```
+
+The `oc`, `oc.cmd` and `oc.ps1` launchers in this directory run the package
+without installing it, as long as Python is on `PATH`.
+
+| Platform | Launcher |
+|----------|----------|
+| Linux / macOS | `./oc` |
+| Windows (PowerShell) | `.\oc` or `.\oc.ps1` |
+| Windows (cmd.exe) | `oc.cmd` |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `oc` | Start or attach to opencode (starts background server if needed) |
+| `oc` | Start or attach to opencode (starts the background server if needed) |
 | `oc serve` | Start a persistent server in the **foreground** |
-| `oc serve -Background` | Start a persistent server as a **background daemon** |
-| `oc serve -Status` | Show server status (mode, password hint) |
-| `oc serve -Restart` | Kill and restart the server with a new password |
+| `oc serve --background` | Start a persistent server as a **background daemon** |
+| `oc serve --status` | Show server status (mode, sessions, idle timer) |
+| `oc serve --restart` | Kill and restart the server with a new password |
 | `oc encrypt` | Encrypt and store API keys |
 | `oc decrypt` | List stored API key names |
-| `oc decrypt -ShowValues` | Show key values (use with care!) |
-| `oc session [args..]` | Manage opencode sessions |
-| `oc model [provider]` | List AI models |
+| `oc reveal` | Copy key values to the **clipboard** (never to stdout) |
+| `oc reveal --print` | Print key values (asks for confirmation) |
 | `oc stop` | Stop the running server |
-| `oc -Dir <path>` | Attach with a specific working directory |
-| `oc -Help` | Show help |
+| `oc --dir <path>` | Attach with a specific working directory |
+| `oc session [args..]` | Manage opencode sessions |
+| `oc model [args..]` | List AI models |
+| `oc --help` | Show help |
 
-## Server modes
-
-The server can run in two modes, and you can switch between them:
-
-| Mode | Command to enter | Persistence |
-|------|------------------|-------------|
-| **Foreground** | `oc serve` | Runs in the current terminal, shows logs, Ctrl+C to stop |
-| **Background** | `oc` or `oc serve -Background` | Runs as a daemon, auto-stops after 15 min without an active session — use `oc stop` to shut down sooner |
-
-### Mode switching rules
-
-- **`oc serve -Background`** on a foreground server → restarts it as a background server (keeps password)
-- **`oc serve -Background`** on a background server → no-op (server already in background mode)
-- **`oc serve`** on a background server → restarts it as a foreground server (keeps password)
-
-When switching modes, the **server password is preserved** so active attach sessions stay authenticated. The password only changes on a fresh start or explicit restart (`oc serve -Restart`).
+The old `-Dir` / `-Background` / `-Status` / `-Restart` spellings are still
+accepted; the long `--flag` forms are preferred.
 
 ## Quick start
 
 ### 1. Encrypt your API keys
 
-```powershell
-.\oc encrypt
+```sh
+oc encrypt
 ```
 
-You will be prompted for:
-- A **master password** (used to encrypt the file)
-- One or more **key name/value pairs** (e.g. `OPENROUTER_API_KEY`, `OPENAI_API_KEY`)
-
-Leave the key name empty to finish. An `api-keys.dat` file is created.
+You are prompted for a **master password** (twice) and then for one or more
+key name/value pairs (e.g. `OPENROUTER_API_KEY`). **Values are hidden while
+you type.** Leave the key name empty to finish.
 
 ### 2. List stored keys
 
-```powershell
-.\oc decrypt
+```sh
+oc decrypt
 ```
 
-Shows the names of all keys stored in the file. To also reveal the values (use with care):
+To move the values to the clipboard instead of the terminal:
 
-```powershell
-.\oc decrypt -ShowValues
+```sh
+oc reveal
 ```
 
 ### 3. Launch opencode
 
-```powershell
-.\oc
+```sh
+oc
 ```
 
-- **First run:** prompts for your master password, starts a password-protected headless `opencode serve`, and attaches your TUI session. When you exit, the server stays alive.
-- **Subsequent runs:** detect the existing server and attach directly — **no master password prompt**. You can attach from multiple terminals simultaneously.
-- Use `oc stop` to shut down the server when you're done.
+- **First run:** prompts for your master password, starts a password-protected
+  background `opencode serve`, and attaches your TUI session.
+- **Later runs:** detects the running server and attaches directly — **no
+  master password prompt**.
+- Use `oc stop` when you are done.
 
-### 4. Foreground persistent server
+### 4. Persistent server
 
-```powershell
-.\oc serve
+```sh
+oc serve --background   # daemon, survives closing the terminal
+oc serve                # foreground, shows logs, Ctrl+C to stop
 ```
 
-Runs the server in the current terminal, showing opencode's logs. Close the terminal or press Ctrl+C to stop. Other terminals can still attach.
+Background servers auto-stop after **15 minutes without an active session**.
 
-### 5. Background persistent server (daemon)
+### 5. Inspect and restart
 
-```powershell
-.\oc serve -Background
+```sh
+oc serve --status     # mode, sessions, idle countdown
+oc serve --restart    # kill and restart with a NEW password
 ```
 
-Runs the server in the background, surviving terminal closure. Stop it manually:
+## Security model
 
-```powershell
-.\oc stop
-```
+### Key store
 
-### 6. Inspect and restart
+| Property | Value |
+|----------|-------|
+| Cipher | AES-256-GCM (authenticated) |
+| Key derivation | Argon2id (t=3, m=64 MiB, p=4), else scrypt, else PBKDF2-SHA256 (600k) |
+| Location | `~/.oc/keys.dat` (`%USERPROFILE%\.oc\keys.dat` on Windows) |
+| Permissions | `0600` on POSIX, current-user-only ACL on Windows |
+| Container | `SOC2` magic + JSON header authenticated as AEAD associated data |
 
-- Show mode, password hint:
+The JSON header records the KDF and its parameters and is authenticated, so a
+downgrade of the KDF parameters makes decryption fail instead of silently
+weakening the file. The master password is **never stored** and is only held
+in memory while the keys are decrypted.
 
-```powershell
-.\oc serve -Status
-```
+### Server protection
 
-- Kill and restart with a NEW password:
+- A fresh **random password** is generated each time the server starts.
+- The password is **not stored in the state file**. It lives in the OS keyring
+  (or DPAPI / a `0600` key file as a last resort).
+- The state file is protected by **HMAC-SHA256** using a key that is
+  independent of the server password — tampering is detected instead of being
+  silently accepted.
+- `oc attach` passes the password via the `OPENCODE_SERVER_PASSWORD`
+  environment variable, **never** as a command-line argument.
+- The server process working directory is your **home directory**, so the
+  project folder is never locked.
 
-```powershell
-.\oc serve -Restart
-```
+### What changed versus the PowerShell version
 
-## Server lifecycle
+- **No `-ShowValues` on stdout.** `oc reveal` copies to the clipboard by
+  default; printing requires an explicit `--print` and a confirmation.
+- **No plaintext fallback.** On systems without a keyring, the server password
+  is encrypted with a `0600` key file and the backend is reported in `--help`.
+- **No circular HMAC.** The integrity key no longer derives from the password
+  stored next to it.
+- **Key values are hidden while typing** (`getpass`) instead of echoed by
+  `Read-Host`.
+- **The key store is outside the repository**, so it cannot be committed by
+  accident.
 
-| Scenario | Behavior |
-|----------|----------|
-| First `oc` in any terminal | Starts password-protected server (asks master password), attaches, server persists after exit |
-| Subsequent `oc` in any terminal | Attaches directly (no master password), server stays alive |
-| `oc serve` (foreground) | Server runs in this terminal; closes when terminal closes |
-| `oc serve -Background` | Persistent daemon — auto-stops after 15 min idle, or `oc stop` shuts it down immediately |
-| `oc stop` | Kills the server immediately |
+### Honest limitations
 
-## Security
-
-The opencode server is protected by an **auto-generated random password** created each time the server starts:
-
-- Password is generated from a cryptographically random GUID
-- Set via `OPENCODE_SERVER_PASSWORD` environment variable in the server process only (never in the parent session)
-- Stored in `%USERPROFILE%\.oc\server-state.json` encrypted with **DPAPI** (Windows Data Protection API — bound to the current user and machine)
-- State file includes **HMAC-SHA256** integrity protection against tampering
-- State directory and files have **restrictive ACLs** (current user only)
-- `oc attach` passes the password via `OPENCODE_SERVER_PASSWORD` environment variable (never as a CLI argument)
-- Other processes on the same machine **cannot connect** without the password
-- Background servers run an **idle watchdog**: after 15 minutes without an active session, the server is stopped and the state file is removed
-- Server process working directory is set to **`$HOME`** — the project directory is never locked, allowing rename/move while the server is running
-- Due to a Windows limitation (`CreateProcess` cannot run `.ps1` files directly), if `opencode` resolves to a `.ps1` wrapper (e.g. npm install), the script transparently switches to the `.cmd` wrapper in the same directory, then corrects the stored PID via the server port to ensure `oc stop` targets the real process
-
-The master password for `api-keys.dat` is **never stored** — it is prompted each time a server starts.
+- API keys must still be handed to `opencode serve` through its environment.
+  Any process running as your user can read a process environment, so this is
+  not a boundary against a local attacker with your privileges — it protects
+  the keys at rest.
+- The fallback key-file backend (headless POSIX without a keyring) only
+  protects against casual file reads.
 
 ## State files
 
-All runtime state lives in `%USERPROFILE%\.oc\`:
+Everything lives under `~/.oc/`:
 
 | Path | Purpose |
 |------|---------|
-| `server-state.json` | Current mode, DPAPI-encrypted password, process PID, transition flag, HMAC integrity hash |
+| `keys.dat` | AES-256-GCM encrypted API keys |
+| `server-state.json` | Mode, PID, idle timestamp, HMAC (no password) |
+| `secrets/` | Backend files when no OS keyring is available |
 
-## Requirements
+Set `SECURE_OC_HOME` to relocate the whole directory, and `SECURE_OC_PORT` to
+change the server port (default `4096`).
 
-- PowerShell 5.1+ ([PowerShell 7](https://learn.microsoft.com/en-us/powershell/) recommended)
-- [opencode](https://opencode.ai) installed and available in `PATH`
+## Migrating from the PowerShell version
+
+The container format changed, so old `api-keys.dat` files are **not** read.
+Re-run `oc encrypt` once and delete the old `api-keys.dat`.
+
+## License
+
+MIT

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secure-oc"
+version = "2.0.0"
+description = "Secure wrapper around opencode with an encrypted API-key store"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+# Stronger key derivation (Argon2id), OS keyring integration and fast
+# process/port inspection. Recommended.
+full = [
+    "argon2-cffi>=23.1",
+    "keyring>=24.0",
+    "psutil>=5.9",
+]
+
+[project.scripts]
+secure-oc = "secure_oc.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["secure_oc*"]

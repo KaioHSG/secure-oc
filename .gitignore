@@ -1,1 +1,23 @@
+# Secrets — never commit these
 api-keys.dat
+keys.dat
+server-state.json
+
+# Local state directories
+.oc/
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
