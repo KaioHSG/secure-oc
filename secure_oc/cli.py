@@ -422,7 +422,7 @@ def _restart_keeping_password(keys: dict, password: str, final_mode: str) -> int
     return 0
 
 
-def _attach(password: Optional[str], workdir: str) -> int:
+def _attach(password: Optional[str], workdir: str, extra: list) -> int:
     try:
         binary = server.find_opencode()
     except ConfigError as exc:
@@ -432,14 +432,18 @@ def _attach(password: Optional[str], workdir: str) -> int:
     env = dict(os.environ)
     if password:
         env["OPENCODE_SERVER_PASSWORD"] = password
-    args = [binary, "attach", URL, "--dir", workdir]
+
+    # opencode >= 2 attaches with `--server <url>` and takes the working
+    # directory as a positional argument. There is no `attach` subcommand
+    # and no `--dir` flag.
+    args = [binary, "--server", URL, workdir, *extra]
     try:
         return subprocess.call(args, env=env)
     except KeyboardInterrupt:
         return 130
 
 
-def cmd_start(opts: dict) -> int:
+def cmd_start(opts: dict, extra: list) -> int:
     try:
         server.find_opencode()
     except ConfigError as exc:
@@ -493,7 +497,7 @@ def cmd_start(opts: dict) -> int:
         state.set_activity()
 
     workdir = os.path.abspath(opts["dir"]) if opts["dir"] else os.getcwd()
-    return _attach(password, workdir)
+    return _attach(password, workdir, extra)
 
 
 def cmd_serve(opts: dict) -> int:
@@ -690,7 +694,7 @@ def main(argv: Optional[list] = None) -> int:
         if command in ("help",):
             show_help()
             return 0
-        return cmd_start(opts)
+        return cmd_start(opts, extra)
     except KeyboardInterrupt:
         ui.warn("\nInterrupted.")
         return 130
