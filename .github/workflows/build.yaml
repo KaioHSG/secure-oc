@@ -8,13 +8,13 @@ on:
         required: true
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*'
 
 permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: '3.12'
+  PYTHON_VERSION: '3.15'
 
 jobs:
   build:
@@ -32,18 +32,23 @@ jobs:
             binary: dist/oc.exe
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install -r requirements-build.txt
 
       - name: Build binary
         run: pyinstaller --clean --noconfirm packaging/oc.spec
@@ -52,7 +57,7 @@ jobs:
         run: ${{ matrix.binary }} --help
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
@@ -66,26 +71,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
 
       - name: Publish release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          echo "Publishing release $tag"
-          ls -l artifacts
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" artifacts/* --clobber
-          else
-            gh release create "$tag" artifacts/* --title "$tag" --generate-notes
-          fi
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
