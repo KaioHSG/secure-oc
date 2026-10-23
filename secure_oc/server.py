@@ -100,24 +100,48 @@ def start(keys: dict, password: str, port: int, *, background: bool) -> subproce
 
 
 def spawn_watchdog(state_path, port: int, timeout_secs: int) -> bool:
-    """Launch a detached Python process that stops an idle background server."""
-    args = [
-        sys.executable,
-        "-m",
-        "secure_oc",
-        "__watchdog",
-        "--state",
-        str(state_path),
-        "--port",
-        str(port),
-        "--timeout",
-        str(int(timeout_secs)),
-    ]
-    env = dict(os.environ)
-    package_root = str(Path(__file__).resolve().parent.parent)
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = package_root + (os.pathsep + existing if existing else "")
+    """Launch a detached process that stops an idle background server.
+
+    Works both when running from source (``python -m secure_oc``) and from a
+    frozen PyInstaller binary, where ``sys.executable`` is the binary itself
+    and the ``-m secure_oc`` form does not apply.
+    """
+    if getattr(sys, "frozen", False):
+        args = [
+            sys.executable,
+            "__watchdog",
+            "--state",
+            str(state_path),
+            "--port",
+            str(port),
+            "--timeout",
+            str(int(timeout_secs)),
+        ]
+        env = dict(os.environ)
+    else:
+        args = [
+            sys.executable,
+            "-m",
+            "secure_oc",
+            "__watchdog",
+            "--state",
+            str(state_path),
+            "--port",
+            str(port),
+            "--timeout",
+            str(int(timeout_secs)),
+        ]
+        env = dict(os.environ)
+        package_root = str(Path(__file__).resolve().parent.parent)
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = package_root + (os.pathsep + existing if existing else "")
+
     try:
+        # Drop PyInstaller's extraction-dir variables so the child extracts
+        # (and later cleans up) its own temp directory instead of pinning the
+        # parent's, which would make the parent's cleanup fail.
+        for key in [k for k in env if k.startswith("_MEI") or k.startswith("_PYI")]:
+            env.pop(key, None)
         subprocess.Popen(args, cwd=str(Path.home()), env=env, **_detach_kwargs())
         return True
     except Exception:
