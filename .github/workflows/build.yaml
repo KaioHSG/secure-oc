@@ -25,10 +25,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: oc-linux-x86_64
+            artifact: secure-oc-Linux
+            archive: secure-oc-Linux.tar.gz
             binary: dist/oc
           - os: windows-latest
-            artifact: oc-windows-x86_64
+            artifact: secure-oc-Windows
+            archive: secure-oc-Windows.zip
             binary: dist/oc.exe
     steps:
       - name: Checkout
@@ -56,11 +58,26 @@ jobs:
       - name: Smoke test
         run: ${{ matrix.binary }} --help
 
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p package
+          cp dist/oc package/oc
+          chmod +x package/oc
+          tar -czf ${{ matrix.archive }} -C package oc
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item dist/oc.exe package/oc.exe
+          Compress-Archive -Path package/oc.exe -DestinationPath ${{ matrix.archive }} -Force
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.binary }}
+          path: ${{ matrix.archive }}
           if-no-files-found: error
 
   release:
@@ -70,6 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -80,7 +99,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: secure-oc - ${{ env.RELEASE_TAG }}
           files: artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
