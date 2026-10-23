@@ -26,12 +26,10 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: secure-oc-Linux
-            archive: secure-oc-Linux.tar.gz
-            binary: dist/oc
+            archive: dist/secure-oc-Linux.tar.gz
           - os: windows-latest
             artifact: secure-oc-Windows
-            archive: secure-oc-Windows.zip
-            binary: dist/oc.exe
+            archive: dist/secure-oc-Windows.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,26 +50,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
 
-      - name: Build binary
-        run: pyinstaller --clean --noconfirm packaging/oc.spec
-
-      - name: Smoke test
-        run: ${{ matrix.binary }} --help
-
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p package
-          cp dist/oc package/oc
-          chmod +x package/oc
-          tar -czf ${{ matrix.archive }} -C package oc
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force package | Out-Null
-          Copy-Item dist/oc.exe package/oc.exe
-          Compress-Archive -Path package/oc.exe -DestinationPath ${{ matrix.archive }} -Force
+      - name: Build
+        run: python build.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

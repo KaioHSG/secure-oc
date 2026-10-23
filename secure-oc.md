@@ -196,7 +196,9 @@ oc --help
 | Path | Purpose |
 |------|---------|
 | `secure_oc/` | Python package |
-| `oc`, `oc.cmd`, `oc.ps1` | Launchers (sh, cmd.exe, PowerShell) |
+| `build.py` | Builds the standalone binary and the release archive |
+| `packaging/oc.spec` | PyInstaller spec |
+| `packaging/entrypoint.py` | Entry point used by the frozen binary |
 | `~/.oc/keys.dat` | Encrypted API keys |
 | `~/.oc/server-state.json` | Server state (no password) |
 | `~/.oc/secrets/` | Secret-store files when no keyring is available |

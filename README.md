@@ -32,20 +32,38 @@ or, as an editable package that provides a `secure-oc` entry point:
 python -m pip install -e ".[full]"
 ```
 
-The `oc`, `oc.cmd` and `oc.ps1` launchers in this directory run the package
-without installing it, as long as Python is on `PATH`.
+To run straight from a clone without installing, use the module entry point
+from the repository root:
 
-| Platform | Launcher |
-|----------|----------|
-| Linux / macOS | `./oc` |
-| Windows (PowerShell) | `.\oc` or `.\oc.ps1` |
-| Windows (cmd.exe) | `oc.cmd` |
+```sh
+python -m secure_oc --help
+```
 
 ### Prebuilt binaries
 
-Tagged releases (`v*`) publish standalone binaries that need no Python
-installed: `oc-windows-x86_64.exe` and `oc-linux-x86_64`. See the
-[releases page](https://github.com/KaioHSG/secure-oc/releases).
+Tagged releases (`v*`) publish standalone archives that need no Python:
+
+| Platform | Archive | Binary inside |
+|----------|---------|---------------|
+| Windows | `secure-oc-Windows.zip` | `oc.exe` |
+| Linux | `secure-oc-Linux.tar.gz` | `oc` |
+
+See the [releases page](https://github.com/KaioHSG/secure-oc/releases).
+
+### Building the binaries
+
+```sh
+python -m pip install -r requirements-build.txt
+python build.py
+```
+
+`build.py` wraps PyInstaller, smoke-tests the result and writes the platform
+archive to `dist/`. PyInstaller cannot cross-compile, so it has to run once
+per platform — the release workflow does this in a matrix.
+
+The command name depends on how you got it: the release binary is `oc`, a
+`pip install` provides `secure-oc`, and a source checkout uses
+`python -m secure_oc`. The examples below use `oc`.
 
 ## Commands
 
