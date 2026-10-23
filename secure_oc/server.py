@@ -23,7 +23,6 @@ from .errors import ConfigError
 _IS_WINDOWS = os.name == "nt"
 
 CREATE_NO_WINDOW = 0x08000000
-DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 STILL_ACTIVE = 259
@@ -75,13 +74,25 @@ def build_env(keys: dict, server_password: Optional[str]) -> dict:
 
 
 def _detach_kwargs() -> dict:
+    """Popen kwargs that detach the child without ever showing a window.
+
+    ``DETACHED_PROCESS`` is deliberately avoided: on Windows it makes a
+    visible ``PseudoConsoleWindow`` pop up for every detached spawn (one
+    for the server, one for the watchdog). ``CREATE_NO_WINDOW`` plus a
+    hidden ``STARTUPINFO`` keeps the child detached and window-less while
+    still surviving the parent process.
+    """
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
     if _IS_WINDOWS:
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["creationflags"] = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        kwargs["startupinfo"] = startupinfo
     else:
         kwargs["start_new_session"] = True
     return kwargs
