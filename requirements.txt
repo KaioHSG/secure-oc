@@ -1,11 +1,9 @@
 # Required: AES-256-GCM authenticated encryption.
 cryptography>=50.0
 
-# Recommended: Argon2id key derivation, OS keyring integration and fast
-# process/port inspection. secure-oc degrades gracefully without them.
-argon2-cffi>=25.1
-keyring>=25.7
-psutil>=7.2
-
-# Linux: Secret Service backend so keyring can reach GNOME Keyring / KWallet.
-secretstorage>=3.5 ; sys_platform == "linux"
+# For the recommended extras (Argon2id key derivation, OS keyring integration
+# and fast process/port inspection) install requirements-full.txt instead:
+#
+#     python -m pip install -r requirements-full.txt
+#
+# or, as an editable package:  python -m pip install -e ".[full]"

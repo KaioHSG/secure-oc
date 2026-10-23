@@ -9,9 +9,8 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Optional
 
-from . import crypto, paths, secrets_store, server, state, ui
+from . import __version__, crypto, paths, secrets_store, server, state, ui
 from .errors import ConfigError, CryptoError, SecureOcError, WrongPasswordError
 
 PORT = int(os.environ.get("SECURE_OC_PORT", "4096"))
@@ -39,6 +38,9 @@ _FLAG_ALIASES = {
     "-help": "help",
     "--help": "help",
     "-h": "help",
+    "-version": "version",
+    "--version": "version",
+    "-v": "version",
 }
 
 
@@ -57,6 +59,7 @@ def _parse(argv: list) -> tuple[list, dict]:
         "print": False,
         "yes": False,
         "help": False,
+        "version": False,
     }
     positional: list = []
     index = 0
@@ -112,10 +115,12 @@ def read_secret(prompt: str) -> str:
 
 
 def generate_password() -> str:
-    return os.urandom(8).hex()
+    # 128 bits of entropy: cheap and comfortably above the 64 bits of the
+    # previous 8-byte value for a value guarding a local server.
+    return os.urandom(16).hex()
 
 
-def _load_keys() -> Optional[dict]:
+def _load_keys() -> dict | None:
     """Prompt for the master password and return the decrypted key map."""
     if not paths.KEYS_PATH.exists():
         ui.error("No key store found. Run 'oc encrypt' first.")
@@ -141,6 +146,8 @@ def _load_keys() -> Optional[dict]:
         ui.error(f"Could not read the key store: {exc}")
         return None
     finally:
+        # Python strings are immutable, so this only drops the reference
+        # early; it is not a guaranteed wipe of the password in memory.
         del master
 
 
@@ -198,7 +205,13 @@ def wait_ready(max_wait: float = 30.0) -> bool:
 def sync_pid_from_port() -> None:
     real = server.listener_pid(PORT)
     current = state.load()
-    if real and current and real != current.pid and current.password:
+    if (
+        real
+        and current
+        and real != current.pid
+        and current.password
+        and server.pid_looks_like_opencode(real)
+    ):
         state.save(current.mode, current.password, real, transition=current.transition)
 
 
@@ -329,7 +342,7 @@ def cmd_status() -> int:
     if current.mode == "background" and current.last_activity and attached == 0:
         idle = int(time.time()) - int(current.last_activity)
         remaining = max(0, IDLE_TIMEOUT_MIN * 60 - idle)
-        ui.dim(f"  Idle:     {int(-(-remaining // 60))} min until auto-stop")
+        ui.dim(f"  Idle:     {(remaining + 59) // 60} min until auto-stop")
     elif current.mode == "background" and attached > 0:
         ui.dim("  Idle:     timer paused (sessions active)")
     return 0
@@ -344,7 +357,10 @@ def cmd_stop() -> int:
     current = state.load()
     target = current.pid if current else None
     if not target or not server.pid_alive(target):
-        target = server.listener_pid(PORT)
+        # Fall back to the port owner, but only if it is actually opencode —
+        # never kill whatever unrelated process may hold the port.
+        candidate = server.listener_pid(PORT)
+        target = candidate if candidate and server.pid_looks_like_opencode(candidate) else None
 
     if target and server.stop(target):
         ui.ok("Server stopped.")
@@ -354,7 +370,7 @@ def cmd_stop() -> int:
     return 0
 
 
-def _start_background(keys: dict, password: str, opencode: Optional[str]) -> bool:
+def _start_background(keys: dict, password: str, opencode: str | None) -> bool:
     try:
         process = server.start(keys, password, PORT, background=True, opencode=opencode)
     except OSError as exc:
@@ -374,7 +390,7 @@ def _start_background(keys: dict, password: str, opencode: Optional[str]) -> boo
     return True
 
 
-def _serve_foreground(keys: dict, password: str, opencode: Optional[str]) -> int:
+def _serve_foreground(keys: dict, password: str, opencode: str | None) -> int:
     try:
         process = server.start(keys, password, PORT, background=False, opencode=opencode)
     except OSError as exc:
@@ -405,7 +421,7 @@ def _serve_foreground(keys: dict, password: str, opencode: Optional[str]) -> int
 
 
 def _restart_keeping_password(
-    keys: dict, password: str, final_mode: str, opencode: Optional[str]
+    keys: dict, password: str, final_mode: str, opencode: str | None
 ) -> int:
     current = state.load()
     previous_pid = current.pid if current else 0
@@ -432,7 +448,7 @@ def _restart_keeping_password(
 
 
 def _attach(
-    password: Optional[str], workdir: str, extra: list, opencode: Optional[str]
+    password: str | None, workdir: str, extra: list, opencode: str | None
 ) -> int:
     try:
         binary = server.find_opencode(opencode)
@@ -462,7 +478,7 @@ def cmd_start(opts: dict, extra: list) -> int:
         return 1
 
     needs_restart = not is_server_running()
-    password: Optional[str] = None
+    password: str | None = None
 
     if not needs_restart:
         current = state.load()
@@ -558,7 +574,10 @@ def cmd_serve(opts: dict) -> int:
 
         current = state.load()
         if current and current.mode == "foreground":
-            if not confirm("Foreground server detected. Restart in background?", assume_yes=opts["yes"]):
+            if not confirm(
+                "Foreground server detected. Restart in background?",
+                assume_yes=opts["yes"],
+            ):
                 ui.warn("Aborted.")
                 return 1
             keys = _load_keys()
@@ -587,7 +606,10 @@ def cmd_serve(opts: dict) -> int:
         if current and current.mode == "foreground":
             ui.warn("Server is already running in foreground.")
             return 0
-        if not confirm("Background server detected. Restart in foreground?", assume_yes=opts["yes"]):
+        if not confirm(
+            "Background server detected. Restart in foreground?",
+            assume_yes=opts["yes"],
+        ):
             ui.warn("Aborted.")
             return 1
         keys = _load_keys()
@@ -641,6 +663,7 @@ def show_help() -> None:
   oc stop                     Stop the running server
   oc --dir <path>             Attach with a specific working directory
   oc --opencode <path>        Use a specific opencode binary (or set SECURE_OC_OPENCODE)
+  oc --version                Show the version
   oc --help                   Show this help
 """
     )
@@ -668,7 +691,7 @@ def show_help() -> None:
 # --------------------------------------------------------------------------
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     if argv and argv[0] == "__watchdog":
@@ -690,6 +713,10 @@ def main(argv: Optional[list] = None) -> int:
 
     if opts["help"]:
         show_help()
+        return 0
+
+    if opts["version"]:
+        ui.raw(f"secure-oc {__version__}")
         return 0
 
     command = positional[0].lower() if positional else ""

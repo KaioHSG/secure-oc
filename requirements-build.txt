@@ -1,6 +1,10 @@
 # Build-time dependencies for the release binaries.
-# Used by .github/workflows/build.yaml; end users only need requirements.txt.
--r requirements.txt
+# Used by .github/workflows/build.yaml; end users only need requirements.txt
+# (or requirements-full.txt for the recommended extras).
+#
+# The published binaries bundle the recommended extras, so the build pulls
+# the full set in.
+-r requirements-full.txt
 
 # Pinned so the published binaries stay reproducible.
 pyinstaller==6.22.3

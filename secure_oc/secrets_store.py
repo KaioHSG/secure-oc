@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import os
+import sys
 
 from . import paths
 
@@ -30,6 +31,17 @@ SCHEME_KEYFILE = 0x02
 _IS_WINDOWS = os.name == "nt"
 
 
+def _debug(message: str) -> None:
+    """Report a backend failure that was otherwise swallowed.
+
+    Backends degrade silently by design, which can make a broken keyring
+    look like a missing password. Set ``SECURE_OC_DEBUG`` to see why a
+    backend was skipped or failed.
+    """
+    if os.environ.get("SECURE_OC_DEBUG"):
+        print(f"[secure-oc] secret store: {message}", file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # keyring backend
 # --------------------------------------------------------------------------
@@ -38,14 +50,17 @@ _IS_WINDOWS = os.name == "nt"
 def _keyring_module():
     try:
         import keyring  # type: ignore
-    except Exception:
+    except Exception as exc:
+        _debug(f"keyring is not installed ({exc})")
         return None
     try:
         backend = keyring.get_keyring()
-    except Exception:
+    except Exception as exc:
+        _debug(f"keyring backend lookup failed ({exc})")
         return None
     name = f"{type(backend).__module__}.{type(backend).__name__}".lower()
     if "fail" in name or "null" in name:
+        _debug(f"keyring backend {name!r} is a null/fail backend")
         return None
     return keyring
 
@@ -57,7 +72,8 @@ def _kr_set(label: str, data: bytes) -> bool:
     try:
         kr.set_password(SERVICE, label, base64.b64encode(data).decode("ascii"))
         return True
-    except Exception:
+    except Exception as exc:
+        _debug(f"keyring set for {label!r} failed ({exc})")
         return False
 
 
@@ -68,7 +84,8 @@ def _kr_get(label: str):
     try:
         value = kr.get_password(SERVICE, label)
         return base64.b64decode(value) if value else None
-    except Exception:
+    except Exception as exc:
+        _debug(f"keyring get for {label!r} failed ({exc})")
         return None
 
 
@@ -78,8 +95,8 @@ def _kr_del(label: str) -> None:
         return
     try:
         kr.delete_password(SERVICE, label)
-    except Exception:
-        pass
+    except Exception as exc:
+        _debug(f"keyring delete for {label!r} failed ({exc})")
 
 
 # --------------------------------------------------------------------------
@@ -140,7 +157,8 @@ def _dpapi_get(label: str):
         return None
     try:
         return _dpapi(False, blob[1:])
-    except Exception:
+    except Exception as exc:
+        _debug(f"DPAPI unprotect for {label!r} failed ({exc})")
         return None
 
 
@@ -181,7 +199,8 @@ def _keyfile_get(label: str):
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         return AESGCM(_load_keyfile()).decrypt(blob[1:13], blob[13:], _ENTROPY)
-    except Exception:
+    except Exception as exc:
+        _debug(f"key-file unprotect for {label!r} failed ({exc})")
         return None
 
 
@@ -207,8 +226,8 @@ def protect(label: str, data: bytes) -> None:
         try:
             _dpapi_set(label, data)
             return
-        except Exception:
-            pass
+        except Exception as exc:
+            _debug(f"DPAPI protect for {label!r} failed, using key file ({exc})")
     _keyfile_set(label, data)
 
 

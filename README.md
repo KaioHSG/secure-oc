@@ -15,7 +15,7 @@ Service), or DPAPI on Windows, and is never passed on the command line.
 
 ## Requirements
 
-- **Python 3.9+**
+- **Python 3.10+**
 - [opencode](https://opencode.ai) installed and available in `PATH`
 - `cryptography` (required)
 - `argon2-cffi`, `keyring`, `psutil` (recommended — see below)
@@ -23,8 +23,12 @@ Service), or DPAPI on Windows, and is never passed on the command line.
 ## Install
 
 ```sh
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-full.txt
 ```
+
+`requirements.txt` installs only the required `cryptography`; the recommended
+extras (Argon2id, OS keyring, psutil) live in `requirements-full.txt`. secure-oc
+degrades gracefully without them.
 
 or, as an editable package that provides a `secure-oc` entry point:
 
@@ -84,6 +88,7 @@ The command name depends on how you got it: the release binary is `oc`, a
 | `oc --opencode <path>` | Use a specific opencode binary (or set `SECURE_OC_OPENCODE`) |
 | `oc session [args..]` | Manage opencode sessions |
 | `oc model [args..]` | List AI models |
+| `oc --version` | Show the version |
 | `oc --help` | Show help |
 
 The old `-Dir` / `-Background` / `-Status` / `-Restart` spellings are still
@@ -170,6 +175,9 @@ in memory while the keys are decrypted.
   environment variable, **never** as a command-line argument.
 - The server process working directory is your **home directory**, so the
   project folder is never locked.
+- A process is only stopped or adopted into the state file when its command
+  line identifies it as opencode, so an unrelated program that happens to own
+  the port is never killed.
 
 ### What changed versus the PowerShell version
 
@@ -192,6 +200,9 @@ in memory while the keys are decrypted.
   the keys at rest.
 - The fallback key-file backend (headless POSIX without a keyring) only
   protects against casual file reads.
+- The master password is a Python `str`: dropping its reference (`del`) does
+  not guarantee it is wiped from memory. The keys are protected **at rest**,
+  not against a memory dump of the running process.
 
 ## State files
 
@@ -204,7 +215,9 @@ Everything lives under `~/.oc/`:
 | `secrets/` | Backend files when no OS keyring is available |
 
 Set `SECURE_OC_HOME` to relocate the whole directory, and `SECURE_OC_PORT` to
-change the server port (default `4096`).
+change the server port (default `4096`). Set `SECURE_OC_DEBUG=1` to see why a
+secret-store backend was skipped or failed — the backends degrade silently by
+design, so this is the way to diagnose a broken keyring.
 
 ### Finding the opencode binary
 
@@ -221,6 +234,17 @@ profile or editor that launches `oc` without a shell.
 
 The container format changed, so old `api-keys.dat` files are **not** read.
 Re-run `oc encrypt` once and delete the old `api-keys.dat`.
+
+## Development
+
+```sh
+python -m pip install -e ".[full,dev]"
+pytest          # test suite (crypto, state, CLI, process identity)
+ruff check .    # lint
+```
+
+The test suite runs against a throwaway `~/.oc` and a deterministic key-file
+secret backend, so it never touches your real state.
 
 ## License
 

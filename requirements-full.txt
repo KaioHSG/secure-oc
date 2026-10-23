@@ -1,0 +1,12 @@
+# Required plus every recommended dependency. secure-oc degrades gracefully
+# without the extras, but this is the setup the project is tested against.
+-r requirements.txt
+
+# Argon2id key derivation, OS keyring integration and fast process/port
+# inspection.
+argon2-cffi>=25.1
+keyring>=25.7
+psutil>=7.2
+
+# Linux: Secret Service backend so keyring can reach GNOME Keyring / KWallet.
+secretstorage>=3.5 ; sys_platform == 'linux'

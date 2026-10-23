@@ -16,7 +16,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from .errors import ConfigError
 
@@ -54,7 +53,7 @@ def _normalize_opencode(path: str) -> str:
     return path
 
 
-def find_opencode(explicit: Optional[str] = None) -> str:
+def find_opencode(explicit: str | None = None) -> str:
     """Resolve the opencode binary.
 
     Order of precedence: the explicit path (``--opencode``), the
@@ -80,7 +79,7 @@ def find_opencode(explicit: Optional[str] = None) -> str:
     )
 
 
-def build_env(keys: dict, server_password: Optional[str]) -> dict:
+def build_env(keys: dict, server_password: str | None) -> dict:
     """Parent environment plus injected API keys and the server password.
 
     The keys are only ever placed in the child process environment; the
@@ -130,7 +129,7 @@ def start(
     port: int,
     *,
     background: bool,
-    opencode: Optional[str] = None,
+    opencode: str | None = None,
 ) -> subprocess.Popen:
     """Start ``opencode serve`` and return the Popen handle."""
     binary = find_opencode(opencode)
@@ -247,7 +246,58 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
-def listener_pid(port: int) -> Optional[int]:
+def _process_description(pid: int) -> str | None:
+    """Best-effort lowercase ``name + command line`` for *pid*, or ``None``.
+
+    Prefers psutil; falls back to ``tasklist`` (Windows) / ``ps`` (POSIX).
+    Returns ``None`` when the process cannot be inspected at all.
+    """
+    ps = _psutil()
+    if ps is not None:
+        try:
+            proc = ps.Process(pid)
+            parts = [proc.name() or "", *(proc.cmdline() or [])]
+            return " ".join(parts).strip().lower()
+        except Exception:
+            return None
+
+    try:
+        if _IS_WINDOWS:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+        else:
+            out = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "comm=,args="],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+    except Exception:
+        return None
+    return out.strip().lower() or None
+
+
+def pid_looks_like_opencode(pid: int) -> bool:
+    """Heuristic: does *pid* look like opencode (or the npm wrapper around it)?
+
+    Guards the two destructive operations — adopting a PID into the state
+    file and killing a process — so an unrelated program that merely happens
+    to own the server port is never touched. When the process cannot be
+    inspected, returns ``False`` (stay conservative: never kill blindly).
+    """
+    if pid <= 0:
+        return False
+    description = _process_description(pid)
+    if not description:
+        return False
+    return "opencode" in description
+
+
+def listener_pid(port: int) -> int | None:
     """PID of the process listening on *port*, or ``None``."""
     ps = _psutil()
     if ps is not None:
@@ -268,7 +318,11 @@ def listener_pid(port: int) -> Optional[int]:
             ).stdout
             for line in out.splitlines():
                 parts = line.split()
-                if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3].upper() == "LISTENING":
+                if (
+                    len(parts) >= 5
+                    and parts[1].endswith(f":{port}")
+                    and parts[3].upper() == "LISTENING"
+                ):
                     return int(parts[4])
         else:
             out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=10).stdout
@@ -302,7 +356,9 @@ def established_count(port: int) -> int:
 
     try:
         if _IS_WINDOWS:
-            out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=10).stdout
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, timeout=10
+            ).stdout
         else:
             out = subprocess.run(["ss", "-tn"], capture_output=True, text=True, timeout=10).stdout
         count = 0
@@ -381,7 +437,10 @@ def run_watchdog(state_path, port: int, timeout_secs: int, interval: int = 60) -
 
         current = state_mod.load()
         if current is None or current.pid != raw.get("pid"):
-            continue
+            # A different server (or none) now owns the state file: this
+            # watchdog is stale, so exit instead of piling up alongside the
+            # watchdog that was spawned for the replacement server.
+            return
 
         established = established_count(port)
         if established != 0:

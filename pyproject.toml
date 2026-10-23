@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "secure-oc"
-version = "0.10.1"
+version = "1.0.0"
 description = "Secure wrapper around opencode with an encrypted API-key store"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,9 +23,25 @@ full = [
     "psutil>=7.2",
     "secretstorage>=3.5 ; sys_platform == 'linux'",
 ]
+# Development and CI: test runner and linter.
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
 
 [project.scripts]
 secure-oc = "secure_oc.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["secure_oc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

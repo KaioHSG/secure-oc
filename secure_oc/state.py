@@ -17,7 +17,6 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from . import paths, secrets_store
 
@@ -33,8 +32,8 @@ class ServerState:
     mode: str
     pid: int
     transition: bool
-    last_activity: Optional[int]
-    password: Optional[str]
+    last_activity: int | None
+    password: str | None
     integrity_ok: bool = True
 
 
@@ -46,7 +45,7 @@ def _hmac_key() -> bytes:
     return key
 
 
-def _canonical(mode: str, pid: int, transition: bool, last_activity: Optional[int]) -> bytes:
+def _canonical(mode: str, pid: int, transition: bool, last_activity: int | None) -> bytes:
     payload = {
         "mode": mode,
         "pid": int(pid),
@@ -56,12 +55,12 @@ def _canonical(mode: str, pid: int, transition: bool, last_activity: Optional[in
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _sign(mode: str, pid: int, transition: bool, last_activity: Optional[int]) -> str:
+def _sign(mode: str, pid: int, transition: bool, last_activity: int | None) -> str:
     mac = hmaclib.new(_hmac_key(), _canonical(mode, pid, transition, last_activity), hashlib.sha256)
     return base64.b64encode(mac.digest()).decode("ascii")
 
 
-def _read_raw() -> Optional[dict]:
+def _read_raw() -> dict | None:
     if not paths.STATE_PATH.exists():
         return None
     try:
@@ -70,7 +69,7 @@ def _read_raw() -> Optional[dict]:
         return None
 
 
-def load() -> Optional[ServerState]:
+def load() -> ServerState | None:
     """Read the state file, verifying its integrity and fetching the password."""
     raw = _read_raw()
     if not raw:

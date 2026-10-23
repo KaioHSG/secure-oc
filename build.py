@@ -34,7 +34,7 @@ def ensure_pyinstaller() -> None:
             "PyInstaller is not installed.\n"
             "Install the build dependencies first:\n"
             "    python -m pip install -r requirements-build.txt"
-        )
+        ) from None
 
 
 def clean_dist() -> None:
@@ -47,7 +47,7 @@ def clean_dist() -> None:
             f"Could not clean {DIST.relative_to(ROOT)}: {exc}\n"
             "A secure-oc instance is probably still running from the binary.\n"
             "Stop it first and build again."
-        )
+        ) from exc
 
 
 def build() -> Path:

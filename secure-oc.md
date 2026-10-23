@@ -127,7 +127,8 @@ new server's state.
 
 Resolved in this order: `--opencode <path>`, the `SECURE_OC_OPENCODE`
 environment variable, then `PATH`. An explicit path that does not exist is a
-hard error; the `.ps1` → `.cmd` swap only applies to the `PATH` lookup.
+hard error; a `.ps1` path is swapped for its `.cmd` sibling whenever one
+exists (CreateProcess cannot execute a `.ps1` wrapper).
 
 ```python
 path = explicit or os.environ.get("SECURE_OC_OPENCODE") or shutil.which("opencode")
@@ -152,13 +153,17 @@ if path.endswith(".ps1") and exists(path[:-4] + ".cmd"):
 
 When the npm `.cmd` wrapper is used, the returned PID is `cmd.exe`, not
 `opencode`. After the port is listening, `listener_pid()` (psutil, else
-`netstat`/`ss`) finds the real owner and the state file is corrected.
+`netstat`/`ss`) finds the real owner and the state file is corrected — but only
+when `pid_looks_like_opencode()` recognises the owner's command line, so a
+foreign process that merely owns the port is never recorded as the server.
 
 ### Stopping
 
 Priority: state-file PID → the process owning the server port. The server is
-never matched **by name** (which would kill attach clients too). Uses psutil
-`terminate()`/`kill()`, else `taskkill /PID /T /F` (Windows) or `SIGTERM`.
+never matched **by name** (which would kill attach clients too), and the
+port-owner fallback is only used when its command line identifies it as
+opencode. Uses psutil `terminate()`/`kill()`, else `taskkill /PID /T /F`
+(Windows) or `SIGTERM`.
 
 ## Idle watchdog
 
@@ -167,7 +172,8 @@ process (no base64-encoded script, unlike the PowerShell version). Every 60 s
 it:
 
 1. reads `lastActivity`;
-2. if the idle time exceeds the timeout, re-checks the PID has not changed;
+2. if the idle time exceeds the timeout, re-checks the PID has not changed
+   (if it has, the watchdog exits — a replacement server spawns its own);
 3. counts established connections — if any (or if the count is **unknown**), it
    refreshes `lastActivity` and keeps the server alive;
 4. otherwise stops the server and clears the state.
@@ -204,6 +210,7 @@ oc --help
 | `build.py` | Builds the standalone binary (the workflow packages it) |
 | `packaging/oc.spec` | PyInstaller spec |
 | `packaging/entrypoint.py` | Entry point used by the frozen binary |
+| `tests/` | Pytest suite (hermetic: temp `~/.oc`, key-file backend) |
 | `~/.oc/keys.dat` | Encrypted API keys |
 | `~/.oc/server-state.json` | Server state (no password) |
 | `~/.oc/secrets/` | Secret-store files when no keyring is available |
@@ -212,6 +219,20 @@ oc --help
 
 ## Requirements
 
-- Python 3.9+
-- `cryptography` (required); `argon2-cffi`, `keyring`, `psutil` (recommended)
+- Python 3.10+
+- `cryptography` (required); `argon2-cffi`, `keyring`, `psutil` (recommended —
+  `requirements-full.txt`)
 - opencode available in `PATH`
+
+## Tests
+
+`pytest` covers the container format (round-trip, authenticated header),
+the state-file HMAC, secret-store backends, CLI parsing/flows and process
+identity checks. Each test runs against a temporary `~/.oc` and a forced
+key-file backend, so the suite is hermetic:
+
+```sh
+python -m pip install -e ".[full,dev]"
+pytest
+ruff check .
+```
