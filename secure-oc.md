@@ -196,7 +196,7 @@ oc --help
 | Path | Purpose |
 |------|---------|
 | `secure_oc/` | Python package |
-| `build.py` | Builds the standalone binary and the release archive |
+| `build.py` | Builds the standalone binary (the workflow packages it) |
 | `packaging/oc.spec` | PyInstaller spec |
 | `packaging/entrypoint.py` | Entry point used by the frozen binary |
 | `~/.oc/keys.dat` | Encrypted API keys |

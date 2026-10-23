@@ -57,9 +57,10 @@ python -m pip install -r requirements-build.txt
 python build.py
 ```
 
-`build.py` wraps PyInstaller, smoke-tests the result and writes the platform
-archive to `dist/`. PyInstaller cannot cross-compile, so it has to run once
-per platform — the release workflow does this in a matrix.
+`build.py` wraps PyInstaller and leaves the binary in `dist/` (`oc.exe` on
+Windows, `oc` elsewhere). PyInstaller cannot cross-compile, so it has to run
+once per platform; the release workflow runs it in a matrix and packs the
+result into the platform archives listed above.
 
 The command name depends on how you got it: the release binary is `oc`, a
 `pip install` provides `secure-oc`, and a source checkout uses
