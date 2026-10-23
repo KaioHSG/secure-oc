@@ -41,6 +41,12 @@ without installing it, as long as Python is on `PATH`.
 | Windows (PowerShell) | `.\oc` or `.\oc.ps1` |
 | Windows (cmd.exe) | `oc.cmd` |
 
+### Prebuilt binaries
+
+Tagged releases (`v*`) publish standalone binaries that need no Python
+installed: `oc-windows-x86_64.exe` and `oc-linux-x86_64`. See the
+[releases page](https://github.com/KaioHSG/secure-oc/releases).
+
 ## Commands
 
 | Command | Description |
