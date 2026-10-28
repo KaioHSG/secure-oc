@@ -86,7 +86,9 @@ jobs:
         run: python build.py
 
       - name: Smoke test
-        run: ${{ matrix.binary }} --help
+        run: |
+          ${{ matrix.binary }} --help
+          python packaging/smoke_test.py ${{ matrix.binary }}
 
       - name: Package (Linux)
         if: runner.os == 'Linux'

@@ -6,6 +6,7 @@ run once per platform (see .github/workflows/build.yaml).
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
@@ -22,10 +23,25 @@ try:
 except Exception:
     pass
 
+# On Python 3.15 pip picks cryptography's `cp315-abi3.abi3t` wheel, whose
+# `_rust` extension links against the free-threaded ABI3 shim `python3t.dll`.
+# The interpreter ships that DLL in an `abi3t-compat/` directory beside itself
+# (not on PATH) and adds it to its own DLL search path at startup, so plain
+# `import cryptography` works. PyInstaller cannot resolve it, so a frozen
+# binary fails to import `cryptography` unless we bundle it explicitly.
+binaries = []
+abi3t_compat = os.path.join(sys.base_prefix, "abi3t-compat")
+if os.path.isdir(abi3t_compat):
+    binaries += [
+        (os.path.join(abi3t_compat, name), ".")
+        for name in os.listdir(abi3t_compat)
+        if name.lower().endswith(".dll")
+    ]
+
 a = Analysis(
     [os.path.join(SPECPATH, "entrypoint.py")],
     pathex=[ROOT],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
