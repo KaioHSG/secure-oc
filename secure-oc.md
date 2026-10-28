@@ -126,12 +126,25 @@ new server's state.
 ### opencode resolution
 
 Resolved in this order: `--opencode <path>`, the `SECURE_OC_OPENCODE`
-environment variable, then `PATH`. An explicit path that does not exist is a
+environment variable, `PATH`, and finally a fallback search for launchers that
+do not inherit a shell's `PATH`. An explicit path that does not exist is a
 hard error; a `.ps1` path is swapped for its `.cmd` sibling whenever one
 exists (CreateProcess cannot execute a `.ps1` wrapper).
 
+The fallback exists because Explorer, shortcuts and Task Scheduler give their
+children the environment captured at logon. A `PATH` entry added afterwards —
+a fresh npm install, fnm's per-shell hook, scoop — is simply not there, and
+`shutil.which("opencode")` fails even though the terminal resolves it. The
+probe order is: `PATH` values read straight from the registry (user then
+machine), toolchain managers (nvm, volta, pnpm, fnm, bun), then global
+package-manager prefixes (npm, scoop, winget, chocolatey, Homebrew). Toolchain
+managers win over the npm prefix because that prefix often holds a leftover
+install of a different release line — on one machine it had `opencode-ai` 1.x
+while the active fnm toolchain had `@opencode/cli` 2.x.
+
 ```python
 path = explicit or os.environ.get("SECURE_OC_OPENCODE") or shutil.which("opencode")
+path = path or _which_outside_path()  # registry PATH + known shim dirs
 # CreateProcess cannot run a .ps1 wrapper; npm ships a .cmd sibling
 if path.endswith(".ps1") and exists(path[:-4] + ".cmd"):
     return path[:-4] + ".cmd"

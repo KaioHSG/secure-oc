@@ -58,4 +58,4 @@ def test_decrypt_without_store_errors(monkeypatch, capsys):
 
 def test_version_flag_prints_version(capsys):
     assert cli.main(["--version"]) == 0
-    assert "1.0.1" in capsys.readouterr().out
+    assert "1.0.2" in capsys.readouterr().out

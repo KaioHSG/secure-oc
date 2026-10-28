@@ -34,8 +34,47 @@ def test_explicit_path_beats_env(monkeypatch, tmp_path):
 def test_missing_everywhere_raises(monkeypatch):
     monkeypatch.delenv(server.ENV_OPENCODE, raising=False)
     monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    monkeypatch.setattr(server, "_search_extra_dirs", lambda: [])
     with pytest.raises(ConfigError):
         server.find_opencode()
+
+
+def test_falls_back_to_known_install_dirs(monkeypatch, tmp_path):
+    """A launcher without a shell PATH still finds an installed opencode."""
+    monkeypatch.delenv(server.ENV_OPENCODE, raising=False)
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    fake = tmp_path / server._OPENCODE_NAMES[0]
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr(server, "_search_extra_dirs", lambda: [str(tmp_path)])
+    assert server.find_opencode() == str(fake)
+
+
+def test_extra_dirs_are_deduplicated(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "_registry_path_dirs", lambda: [str(tmp_path)])
+    monkeypatch.setattr(server, "_version_manager_dirs", lambda: [str(tmp_path)])
+    monkeypatch.setattr(server, "_package_manager_dirs", lambda: [str(tmp_path)])
+    assert server._search_extra_dirs() == [str(tmp_path)]
+
+
+def test_version_managers_come_before_npm_prefix(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "_registry_path_dirs", lambda: [])
+    monkeypatch.setattr(server, "_version_manager_dirs", lambda: [str(tmp_path / "fnm")])
+    monkeypatch.setattr(server, "_package_manager_dirs", lambda: [str(tmp_path / "npm")])
+    assert server._search_extra_dirs() == [str(tmp_path / "fnm"), str(tmp_path / "npm")]
+
+
+def test_ensure_on_path_prepends_binary_dir(tmp_path):
+    other = tmp_path / "other"
+    env = {"PATH": str(other)}
+    server.ensure_on_path(env, str(tmp_path / "opencode"))
+    assert env["PATH"].split(os.pathsep) == [str(tmp_path), str(other)]
+
+
+def test_ensure_on_path_is_idempotent(tmp_path):
+    other = tmp_path / "other"
+    frozen = os.pathsep.join([str(tmp_path), str(other)])
+    env = server.ensure_on_path({"PATH": frozen}, str(tmp_path / "opencode"))
+    assert env["PATH"] == frozen
 
 
 def test_ps1_is_swapped_for_cmd_sibling(tmp_path):

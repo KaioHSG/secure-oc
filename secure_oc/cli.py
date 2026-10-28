@@ -459,6 +459,7 @@ def _attach(
     env = dict(os.environ)
     if password:
         env["OPENCODE_SERVER_PASSWORD"] = password
+    server.ensure_on_path(env, binary)
 
     # opencode >= 2 attaches with `--server <url>` and takes the working
     # directory as a positional argument. There is no `attach` subcommand
@@ -682,6 +683,8 @@ def show_help() -> None:
   Server password is kept out of the state file and never passed on the command line.
   Values are hidden while typing and are never echoed unless you ask with --print.
   opencode is resolved from --opencode, then SECURE_OC_OPENCODE, then PATH.
+  Failing that, the usual npm/fnm/bun/volta install locations are probed, so a
+  double-clicked binary works even without a shell's PATH.
 """
     )
 

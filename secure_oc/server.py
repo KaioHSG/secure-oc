@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -43,6 +44,15 @@ def _psutil():
 
 ENV_OPENCODE = "SECURE_OC_OPENCODE"
 
+# npm, pnpm and bun ship opencode as a shim beside the payload. On Windows that
+# is a .cmd (with a .ps1 sibling the shell prefers); CreateProcess cannot run a
+# .ps1, which is why `_normalize_opencode` swaps it for the .cmd.
+_OPENCODE_NAMES = (
+    ("opencode.exe", "opencode.cmd", "opencode.bat", "opencode.ps1", "opencode")
+    if _IS_WINDOWS
+    else ("opencode",)
+)
+
 
 def _normalize_opencode(path: str) -> str:
     # CreateProcess cannot execute a .ps1 wrapper; npm ships a .cmd sibling.
@@ -53,11 +63,161 @@ def _normalize_opencode(path: str) -> str:
     return path
 
 
+def _registry_path_dirs() -> list[str]:
+    """``PATH`` entries stored in the registry (Windows only).
+
+    Explorer, shortcuts and Task Scheduler hand their children the environment
+    they captured at logon, so entries added later (a fresh npm install, fnm,
+    scoop, ...) never reach a double-clicked executable.
+    """
+    if not _IS_WINDOWS:
+        return []
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - only on exotic builds
+        return []
+
+    locations = (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    )
+    dirs: list[str] = []
+    for hive, subkey in locations:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                value, kind = winreg.QueryValueEx(key, "Path")
+        except OSError:
+            continue
+        if not isinstance(value, str):
+            continue
+        if kind == winreg.REG_EXPAND_SZ:
+            value = os.path.expandvars(value)
+        dirs.extend(part for part in value.split(os.pathsep) if part)
+    return dirs
+
+
+def _version_key(name: str) -> list[int]:
+    return [int(part) for part in re.findall(r"\d+", name)]
+
+
+def _fnm_node_dirs() -> list[str]:
+    """Node installations managed by fnm, default alias first then newest.
+
+    fnm only puts its shims on ``PATH`` through a per-shell hook, so there is
+    no stable directory to add to the user environment.
+    """
+    bases = [b for b in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")) if b]
+    preferred = None
+    versions: list[Path] = []
+    for base in bases:
+        alias = Path(base, "fnm", "aliases", "default")
+        try:
+            preferred = alias.read_text(encoding="utf-8").strip() or preferred
+        except OSError:
+            pass
+        root = Path(base, "fnm", "node-versions")
+        if root.is_dir():
+            versions.extend(entry for entry in root.iterdir() if entry.is_dir())
+
+    versions.sort(key=lambda path: _version_key(path.name), reverse=True)
+    if preferred:
+        versions.sort(key=lambda path: path.name != preferred)
+    return [str(entry / "installation") for entry in versions]
+
+
+def _local_app_dir(*parts: str) -> str:
+    base = os.environ.get("LOCALAPPDATA")
+    return str(Path(base, *parts)) if base else ""
+
+
+def _version_manager_dirs() -> list[str]:
+    """Shim directories owned by a toolchain manager.
+
+    These come before the generic package-manager prefixes: a version manager
+    is what a shell would resolve, and the npm prefix often holds a leftover
+    install of a different release line.
+    """
+    home = Path.home()
+    dirs: list[str] = []
+    if _IS_WINDOWS:
+        dirs.extend(
+            [
+                os.environ.get("NVM_SYMLINK") or "",
+                _local_app_dir("Volta", "bin"),
+                _local_app_dir("pnpm"),
+            ]
+        )
+        dirs.extend(_fnm_node_dirs())
+    dirs.append(str(home / ".bun" / "bin"))
+    if not _IS_WINDOWS:
+        dirs.extend(
+            [str(home / ".local" / "bin"), str(home / "bin"), "/opt/homebrew/bin"]
+        )
+    return [directory for directory in dirs if directory and os.path.isdir(directory)]
+
+
+def _package_manager_dirs() -> list[str]:
+    """Global shim directories of npm, scoop, winget and friends."""
+    home = Path.home()
+    env = os.environ
+    dirs: list[str] = []
+    if _IS_WINDOWS:
+        for base, sub in (
+            (env.get("APPDATA"), ("npm",)),
+            (env.get("LOCALAPPDATA"), ("npm",)),
+            (env.get("ProgramData"), ("chocolatey", "bin")),
+            (env.get("ProgramFiles"), ("nodejs",)),
+        ):
+            if base:
+                dirs.append(str(Path(base, *sub)))
+        dirs.append(str(home / "scoop" / "shims"))
+        if env.get("LOCALAPPDATA"):
+            dirs.append(str(Path(env["LOCALAPPDATA"], "Microsoft", "WinGet", "Links")))
+    else:
+        dirs.append("/usr/local/bin")
+    return [directory for directory in dirs if directory and os.path.isdir(directory)]
+
+
+def _search_extra_dirs() -> list[str]:
+    """Directories probed when ``PATH`` does not resolve opencode.
+
+    Order: the registry's ``PATH`` (what a fresh login would see), then
+    toolchain managers, then global package-manager prefixes.
+    """
+    dirs = _registry_path_dirs() if _IS_WINDOWS else []
+    dirs.extend(_version_manager_dirs())
+    dirs.extend(_package_manager_dirs())
+
+    seen = set()
+    unique = []
+    for directory in dirs:
+        key = os.path.normcase(os.path.abspath(directory))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(directory)
+    return unique
+
+
+def _which_outside_path() -> str | None:
+    for directory in _search_extra_dirs():
+        for name in _OPENCODE_NAMES:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
 def find_opencode(explicit: str | None = None) -> str:
     """Resolve the opencode binary.
 
     Order of precedence: the explicit path (``--opencode``), the
-    ``SECURE_OC_OPENCODE`` environment variable, then ``PATH``.
+    ``SECURE_OC_OPENCODE`` environment variable, ``PATH``, and finally the
+    install locations that ``PATH`` misses when the process was not started
+    from a shell (see ``_search_extra_dirs``).
     """
     for source, candidate in (
         ("--opencode", explicit),
@@ -73,10 +233,32 @@ def find_opencode(explicit: str | None = None) -> str:
     if found:
         return _normalize_opencode(found)
 
+    found = _which_outside_path()
+    if found:
+        return _normalize_opencode(found)
+
     raise ConfigError(
         "'opencode' not found in PATH. Install it: https://opencode.ai\n"
         "Or point at it with --opencode <path> / SECURE_OC_OPENCODE."
     )
+
+
+def ensure_on_path(env: dict, binary: str) -> dict:
+    """Prepend *binary*'s directory to ``env["PATH"]``.
+
+    A binary found by ``_which_outside_path`` lives in a directory that is not
+    on the inherited ``PATH``, and npm's shims look up ``node`` through
+    ``PATH``, so the child process needs it there as well.
+    """
+    directory = os.path.dirname(os.path.abspath(binary))
+    entries = [part for part in env.get("PATH", "").split(os.pathsep) if part]
+    if any(
+        os.path.normcase(os.path.abspath(part)) == os.path.normcase(directory)
+        for part in entries
+    ):
+        return env
+    env["PATH"] = os.pathsep.join([directory, *entries])
+    return env
 
 
 def build_env(keys: dict, server_password: str | None) -> dict:
@@ -134,7 +316,7 @@ def start(
     """Start ``opencode serve`` and return the Popen handle."""
     binary = find_opencode(opencode)
     args = [binary, "serve", "--port", str(port)]
-    env = build_env(keys, password)
+    env = ensure_on_path(build_env(keys, password), binary)
     cwd = str(Path.home())
 
     if background:

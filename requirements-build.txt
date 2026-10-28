@@ -8,3 +8,7 @@
 
 # Pinned so the published binaries stay reproducible.
 pyinstaller==6.22.3
+
+# Converts packaging/icons/oc.png into the .ico embedded in the Windows
+# executable (see packaging/oc.spec). Not needed if oc.ico is committed.
+pillow>=10

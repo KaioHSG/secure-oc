@@ -226,9 +226,13 @@ design, so this is the way to diagnose a broken keyring.
 1. `oc --opencode <path>`
 2. the `SECURE_OC_OPENCODE` environment variable
 3. `PATH`
+4. the install locations `PATH` usually misses: the registry's `PATH`, then
+   fnm/volta/nvm/bun/pnpm shims, then npm/scoop/winget/Homebrew prefixes
 
-Use the first two when opencode is not on `PATH` — for example in a terminal
-profile or editor that launches `oc` without a shell.
+Step 4 is what makes a double-clicked `oc.exe` work: Explorer hands its child
+the environment captured at logon, so a `PATH` entry added later (a fresh npm
+install, fnm's per-shell hook) is not there. Use steps 1 and 2 to override the
+choice — for example when several opencode versions are installed.
 
 ## Migrating from the PowerShell version
 
