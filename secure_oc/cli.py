@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from . import __version__, crypto, paths, secrets_store, server, state, ui
+from . import __version__, crypto, installer, paths, secrets_store, server, state, ui
 from .errors import ConfigError, CryptoError, SecureOcError, WrongPasswordError
 
 PORT = int(os.environ.get("SECURE_OC_PORT", "4096"))
@@ -120,9 +120,16 @@ def generate_password() -> str:
     return os.urandom(16).hex()
 
 
-def _load_keys() -> dict | None:
-    """Prompt for the master password and return the decrypted key map."""
+def _load_keys(optional: bool = False) -> dict | None:
+    """Prompt for the master password and return the decrypted key map.
+
+    With ``optional`` a missing key store is not an error: opencode can run on
+    its own credentials, so the caller gets an empty mapping instead.
+    """
     if not paths.KEYS_PATH.exists():
+        if optional:
+            ui.dim("No key store found; starting without injected API keys.")
+            return {}
         ui.error("No key store found. Run 'oc encrypt' first.")
         return None
 
@@ -447,6 +454,34 @@ def _restart_keeping_password(
     return 0
 
 
+def _resolve_opencode(opts: dict) -> str | None:
+    """Resolve opencode, offering to install Bun + opencode when it is missing."""
+    try:
+        return server.find_opencode(opts["opencode"])
+    except ConfigError as exc:
+        ui.error(str(exc))
+
+    # An explicit path or an environment override is a deliberate choice:
+    # installing a second copy would not fix the misconfiguration.
+    if opts["opencode"] or os.environ.get(server.ENV_OPENCODE):
+        return None
+
+    if not confirm("opencode was not found. Install Bun and opencode now?"):
+        ui.dim(f"Install it later with: {installer.install_command()}")
+        return None
+
+    if not installer.install_opencode():
+        return None
+
+    try:
+        binary = server.find_opencode(opts["opencode"])
+    except ConfigError as exc:
+        ui.error(str(exc))
+        return None
+    ui.ok(f"opencode installed: {binary}")
+    return binary
+
+
 def _attach(
     password: str | None, workdir: str, extra: list, opencode: str | None
 ) -> int:
@@ -472,10 +507,7 @@ def _attach(
 
 
 def cmd_start(opts: dict, extra: list) -> int:
-    try:
-        server.find_opencode(opts["opencode"])
-    except ConfigError as exc:
-        ui.error(str(exc))
+    if _resolve_opencode(opts) is None:
         return 1
 
     needs_restart = not is_server_running()
@@ -498,7 +530,7 @@ def cmd_start(opts: dict, extra: list) -> int:
             ui.accent(f"Server already running on {URL}")
 
     if needs_restart:
-        keys = _load_keys()
+        keys = _load_keys(optional=True)
         if keys is None:
             return 1
         password = generate_password()
@@ -536,14 +568,7 @@ def cmd_serve(opts: dict) -> int:
     if opts["status"]:
         return cmd_status()
 
-    try:
-        server.find_opencode(opts["opencode"])
-    except ConfigError as exc:
-        ui.error(str(exc))
-        return 1
-
-    if not paths.KEYS_PATH.exists():
-        ui.error("No key store found. Run 'oc encrypt' first.")
+    if _resolve_opencode(opts) is None:
         return 1
 
     if opts["restart"]:
@@ -553,7 +578,7 @@ def cmd_serve(opts: dict) -> int:
             current = state.load()
             previous_mode = current.mode if current else None
             stop_and_cleanup()
-        keys = _load_keys()
+        keys = _load_keys(optional=True)
         if keys is None:
             return 1
         new_password = generate_password()
@@ -566,7 +591,7 @@ def cmd_serve(opts: dict) -> int:
 
     if opts["background"]:
         if not is_server_running():
-            keys = _load_keys()
+            keys = _load_keys(optional=True)
             if keys is None:
                 return 1
             result = 0 if _start_background(keys, generate_password(), opts["opencode"]) else 1
@@ -581,7 +606,7 @@ def cmd_serve(opts: dict) -> int:
             ):
                 ui.warn("Aborted.")
                 return 1
-            keys = _load_keys()
+            keys = _load_keys(optional=True)
             if keys is None or not current.password:
                 return 1
             result = _restart_keeping_password(
@@ -613,7 +638,7 @@ def cmd_serve(opts: dict) -> int:
         ):
             ui.warn("Aborted.")
             return 1
-        keys = _load_keys()
+        keys = _load_keys(optional=True)
         if keys is None or not current or not current.password:
             return 1
         server.stop(current.pid)
@@ -621,7 +646,7 @@ def cmd_serve(opts: dict) -> int:
         del keys
         return result
 
-    keys = _load_keys()
+    keys = _load_keys(optional=True)
     if keys is None:
         return 1
     result = _serve_foreground(keys, generate_password(), opts["opencode"])
@@ -630,10 +655,8 @@ def cmd_serve(opts: dict) -> int:
 
 
 def _passthrough(opts: dict, extra: list, subcommand: str) -> int:
-    try:
-        binary = server.find_opencode(opts["opencode"])
-    except ConfigError as exc:
-        ui.error(str(exc))
+    binary = _resolve_opencode(opts)
+    if binary is None:
         return 1
     args = [binary, subcommand, *extra]
     try:
@@ -670,8 +693,9 @@ def show_help() -> None:
     )
     ui.bold("WORKFLOW")
     ui.raw(
-        """  First run:   oc            -> master password, starts the server, attaches
+        """  First run:   oc            -> starts the server, attaches (keys are optional)
   Later runs:  oc            -> attaches directly (no master password)
+  Keys:        oc encrypt    -> unlock secret injection (optional)
   Background:  oc serve --background  -> daemon, auto-stops after 15 min idle
   Shutdown:    oc stop
 """
@@ -684,7 +708,8 @@ def show_help() -> None:
   Values are hidden while typing and are never echoed unless you ask with --print.
   opencode is resolved from --opencode, then SECURE_OC_OPENCODE, then PATH.
   Failing that, the usual npm/fnm/bun/volta install locations are probed, so a
-  double-clicked binary works even without a shell's PATH.
+  double-clicked binary works even without a shell's PATH. When opencode is
+  missing entirely, oc offers to install Bun and opencode for you.
 """
     )
 

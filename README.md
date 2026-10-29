@@ -16,7 +16,9 @@ Service), or DPAPI on Windows, and is never passed on the command line.
 ## Requirements
 
 - **Python 3.10+**
-- [opencode](https://opencode.ai) installed and available in `PATH`
+- [opencode](https://opencode.ai) — `oc` looks for it in `PATH` and in the
+  usual npm/fnm/bun locations, and offers to install Bun + opencode when it is
+  missing
 - `cryptography` (required)
 - `argon2-cffi`, `keyring`, `psutil` (recommended — see below)
 
@@ -96,7 +98,7 @@ accepted; the long `--flag` forms are preferred.
 
 ## Quick start
 
-### 1. Encrypt your API keys
+### 1. Encrypt your API keys (optional)
 
 ```sh
 oc encrypt
@@ -105,6 +107,10 @@ oc encrypt
 You are prompted for a **master password** (twice) and then for one or more
 key name/value pairs (e.g. `OPENROUTER_API_KEY`). **Values are hidden while
 you type.** Leave the key name empty to finish.
+
+This step is optional: without a key store, `oc` starts opencode with whatever
+credentials opencode itself is configured with. Encrypting only adds the
+injected keys.
 
 ### 2. List stored keys
 
@@ -124,10 +130,13 @@ oc reveal
 oc
 ```
 
-- **First run:** prompts for your master password, starts a password-protected
-  background `opencode serve`, and attaches your TUI session.
+- **First run:** starts a password-protected background `opencode serve` and
+  attaches your TUI session. If a key store exists you are prompted for the
+  master password; if not, `oc` continues without injected keys.
 - **Later runs:** detects the running server and attaches directly — **no
   master password prompt**.
+- If `opencode` is not installed, `oc` asks whether it should install Bun and
+  opencode for you.
 - Use `oc stop` when you are done.
 
 ### 4. Persistent server
@@ -233,6 +242,16 @@ Step 4 is what makes a double-clicked `oc.exe` work: Explorer hands its child
 the environment captured at logon, so a `PATH` entry added later (a fresh npm
 install, fnm's per-shell hook) is not there. Use steps 1 and 2 to override the
 choice — for example when several opencode versions are installed.
+
+When none of those paths yields a binary, `oc` asks whether it should install
+it, and on a yes installs Bun with its official script and then runs
+`bun install -g --trust @opencode/cli`. Declining (or a non-interactive stdin)
+prints the manual command instead.
+
+Installing through the package manager (instead of downloading a release binary
+from GitHub) is deliberate: opencode detects its install method from the
+`package.json` beside the executable, so `/update` and `opencode upgrade` keep
+working.
 
 ## Migrating from the PowerShell version
 

@@ -58,4 +58,80 @@ def test_decrypt_without_store_errors(monkeypatch, capsys):
 
 def test_version_flag_prints_version(capsys):
     assert cli.main(["--version"]) == 0
-    assert "1.0.2" in capsys.readouterr().out
+    assert "1.0.3" in capsys.readouterr().out
+
+
+def test_load_keys_is_optional_without_store(capsys):
+    """No key store is not an error when keys are optional."""
+    assert cli._load_keys(optional=True) == {}
+    assert "No key store" in capsys.readouterr().out
+
+
+def test_missing_opencode_offers_install(monkeypatch):
+    from secure_oc import installer, server
+    from secure_oc.errors import ConfigError
+
+    calls = []
+
+    def fake_find(explicit=None):
+        calls.append(explicit)
+        if len(calls) == 1:
+            raise ConfigError("'opencode' not found in PATH.")
+        return "C:/fake/opencode.cmd"
+
+    installed = []
+    monkeypatch.setattr(server, "find_opencode", fake_find)
+    monkeypatch.setattr(installer, "install_opencode", lambda: installed.append(True) or True)
+    monkeypatch.setattr(cli, "confirm", lambda question, assume_yes=False: True)
+
+    assert cli._resolve_opencode({"opencode": None}) == "C:/fake/opencode.cmd"
+    assert installed == [True]
+    assert calls == [None, None]
+
+
+def test_missing_opencode_install_declined(monkeypatch, capsys):
+    from secure_oc import installer, server
+    from secure_oc.errors import ConfigError
+
+    def fake_find(explicit=None):
+        raise ConfigError("'opencode' not found in PATH.")
+
+    installed = []
+    monkeypatch.setattr(server, "find_opencode", fake_find)
+    monkeypatch.setattr(installer, "install_opencode", lambda: installed.append(True) or True)
+    monkeypatch.setattr(cli, "confirm", lambda question, assume_yes=False: False)
+
+    assert cli._resolve_opencode({"opencode": None}) is None
+    assert installed == []
+    assert "bun install -g --trust @opencode/cli" in capsys.readouterr().out
+
+
+def test_explicit_path_never_offers_install(monkeypatch, capsys):
+    """A wrong --opencode is a misconfiguration, not a missing dependency."""
+    from secure_oc import server
+    from secure_oc.errors import ConfigError
+
+    def fake_find(explicit=None):
+        raise ConfigError(f"--opencode points to a file that does not exist: {explicit}")
+
+    def fail(question, assume_yes=False):
+        raise AssertionError("must not prompt to install")
+
+    monkeypatch.setattr(server, "find_opencode", fake_find)
+    monkeypatch.setattr(cli, "confirm", fail)
+
+    assert cli._resolve_opencode({"opencode": "C:/nope/opencode"}) is None
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_env_override_never_offers_install(monkeypatch, capsys):
+    from secure_oc import server
+    from secure_oc.errors import ConfigError
+
+    monkeypatch.setenv(server.ENV_OPENCODE, "C:/nope/opencode")
+    monkeypatch.setattr(
+        server, "find_opencode", lambda explicit=None: (_ for _ in ()).throw(ConfigError("nope"))
+    )
+    monkeypatch.setattr(cli, "confirm", lambda *args, **kwargs: False)
+
+    assert cli._resolve_opencode({"opencode": None}) is None

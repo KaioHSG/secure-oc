@@ -22,11 +22,19 @@ It replaces the original single-file `oc.ps1` implementation.
 | `secure_oc/secrets_store.py` | At-rest protection of small secrets (keyring/DPAPI/key file) |
 | `secure_oc/state.py` | Server state file, HMAC integrity, password reference |
 | `secure_oc/server.py` | opencode resolution, process/port management, watchdog |
+| `secure_oc/installer.py` | On-demand install of Bun + opencode |
 | `secure_oc/paths.py` | Directory layout and permission hardening |
 | `secure_oc/ui.py` | Coloured console output |
 | `secure_oc/errors.py` | Exception hierarchy |
 
 ## Key store
+
+The key store is **optional**. It exists to inject API keys into the server
+process; without it, `oc` starts opencode with whatever credentials opencode
+itself is configured with. The CLI passes `optional=True` to `_load_keys` on
+every server/attach path, which yields an empty mapping instead of an error
+when `keys.dat` is missing, while `oc decrypt`/`oc reveal` still report the
+missing store.
 
 ### Container format (`keys.dat`)
 
@@ -150,6 +158,38 @@ if path.endswith(".ps1") and exists(path[:-4] + ".cmd"):
     return path[:-4] + ".cmd"
 ```
 
+### Installing opencode
+
+When the resolver still comes up empty, `_resolve_opencode` in the CLI catches
+the `ConfigError` and, unless `--opencode`/`SECURE_OC_OPENCODE` was set (a wrong
+explicit path is a misconfiguration, not a missing dependency), asks whether to
+install it. On a yes, `installer.install_opencode()`:
+
+1. locates Bun (`PATH`, then `~/.bun/bin`, since a double-clicked binary has
+   the stale logon `PATH`);
+2. if Bun is missing, runs its official script — `irm bun.sh/install.ps1 | iex`
+   on Windows, `curl -fsSL https://bun.sh/install | bash` elsewhere;
+3. runs `<bun> install -g --trust @opencode/cli` (the package the opencode
+   README currently documents; `--trust` runs the install scripts the binary
+   needs), then re-runs the resolver.
+
+Resolution runs again afterwards rather than trusting the install: Bun's global
+bin directory is already part of the fallback search list, so the freshly
+installed binary is found even when the parent `PATH` was never updated.
+
+Why not download the release binary from GitHub? opencode's own updater
+(`/update`, `opencode upgrade`) looks for its `package.json` next to the
+executable to detect the install method (`curl`, `npm`, `pnpm`, `bun`, `yarn`,
+`vp`, `brew`, `winget`). A raw binary has no manifest, so the method is
+undetectable and the upgrade fails with "Could not detect the installation
+method" unless the user passes `--method`. Installing through a package manager
+keeps in-app updates working, and Bun's optional dependencies pick the right
+platform/arch build for us.
+
+`ensure_on_path` also prepends the resolved binary's directory to the server's
+`PATH`. For a Bun install that is `~/.bun/bin`, which is exactly what the
+updater needs to find `bun` when it runs the upgrade command.
+
 ### Launching
 
 `subprocess.Popen([opencode, "serve", "--port", PORT], cwd=Path.home(), env=...)`
@@ -199,7 +239,7 @@ from killing a server that is actually busy.
 ```
 oc                          Start opencode (start server if needed, attach)
 oc serve [--background|--status|--restart]
-oc encrypt
+oc encrypt                 (optional: keys may also come from opencode itself)
 oc decrypt
 oc reveal [--print]
 oc stop
@@ -235,7 +275,8 @@ oc --help
 - Python 3.10+
 - `cryptography` (required); `argon2-cffi`, `keyring`, `psutil` (recommended —
   `requirements-full.txt`)
-- opencode available in `PATH`
+- opencode found in `PATH` or the usual install locations, and installed on
+  request (Bun + `@opencode/cli`) when missing
 
 ## Tests
 
